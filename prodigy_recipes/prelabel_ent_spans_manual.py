@@ -1,7 +1,6 @@
 import prodigy
 from prodigy.components.preprocess import add_tokens
-from prodigy.util import split_string, set_hashes
-from prodigy.models.matcher import PatternMatcher as ProdigyPatternMatcher
+from prodigy.util import set_hashes
 import spacy
 from typing import Optional, List, Dict, Any, Iterable, Iterator
 import os
@@ -10,10 +9,9 @@ from dotenv import load_dotenv
 import logging
 from spacy.matcher import PhraseMatcher
 import pathlib
-import re
 
 # Import the new parser function
-from src.kexp_processing.comment_parser import parse_comment_to_prodigy_tasks
+from src.kexp_processing_utils.comment_parser import parse_comment_to_prodigy_tasks
 
 # Configure logging - Prodigy uses its own logging, but this can be for DB part
 logging.basicConfig(level=logging.INFO,

@@ -6,7 +6,7 @@ import argparse
 import logging
 import re
 from dotenv import load_dotenv
-from kexp_processing.normalization import normalize_text
+from kexp_processing_utils.normalization import normalize_text
 
 # Configure logging
 logging.basicConfig(level=logging.INFO,
