@@ -8,4 +8,8 @@ __pycache__
 *.pyw
 *.pyz
 *.pywz
-/data/raw_kexp_data
+/data/**/
+/data/gazetteers/**/
+/models/**/
+/data/prodigy_filters/**/
+/data/prodigy_filters/filter_url_only.py

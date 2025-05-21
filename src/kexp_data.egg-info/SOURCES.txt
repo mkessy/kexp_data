@@ -1,0 +1,11 @@
+README.md
+setup.py
+src/kexp_data.egg-info/PKG-INFO
+src/kexp_data.egg-info/SOURCES.txt
+src/kexp_data.egg-info/dependency_links.txt
+src/kexp_data.egg-info/top_level.txt
+src/kexp_processing/__init__.py
+src/kexp_processing/normalization.py
+src/scripts/00_extract_kexp_comments.py
+src/scripts/04_prelabel_for_prodigy.py
+src/scripts/__init__.py

@@ -12,13 +12,19 @@ confection==0.1.5
 curated-tokenizers==0.0.9
 curated-transformers==0.1.1
 cymem==2.0.11
-en_core_web_trf @ https://github.com/explosion/spacy-models/releases/download/en_core_web_trf-3.8.0/en_core_web_trf-3.8.0-py3-none-any.whl#sha256=272a31e9d8530d1e075351d30a462d7e80e31da23574f1b274e200f3fff35bf5
+diffusers==0.33.1
+en-core-web-trf @ https://github.com/explosion/spacy-models/releases/download/en_core_web_trf-3.7.3/en_core_web_trf-3.7.3-py3-none-any.whl#sha256=f72abb34bdf174876bd4267b29b2501677e605e0a251fdc56c163003182ed68b
 fastapi==0.110.3
 filelock==3.18.0
 fsspec==2025.3.2
 h11==0.16.0
+hnswlib==0.7.0
+huggingface-hub==0.31.4
 idna==3.10
+importlib_metadata==8.7.0
 Jinja2==3.1.6
+joblib==1.5.0
+-e git+https://github.com/mkessy/kexp_data.git@64f38d315b7e0323b848749b872e950429ffe331#egg=kexp_data
 langcodes==3.5.0
 language_data==1.3.0
 marisa-trie==1.2.1
@@ -28,26 +34,40 @@ mdurl==0.1.2
 mpmath==1.3.0
 murmurhash==1.0.12
 networkx==3.4.2
+nltk==3.9.1
 numpy==1.26.4
 packaging==25.0
+pandas==2.2.3
 peewee==3.16.3
+Pillow==10.1.0
+plotext==4.2.0
 preshed==3.0.9
 prodigy @ file:///Users/pooks/Dev/kexp_data/prodigy-1.17.5-py3-none-any.whl#sha256=a4c4bf09295ac418956c4f28f2d22c47c4d1708b99874bb9af8d917b0b56ebc2
+prodigy_ann @ git+https://github.com/explosion/prodigy-ann@f3f68f2d31234dd7b294f75aa1e783f800bcd636
 pydantic==2.11.4
 pydantic_core==2.33.2
 Pygments==2.19.1
 PyJWT==2.10.1
+python-dateutil==2.9.0.post0
 python-dotenv==1.1.0
+pytz==2025.2
+PyYAML==6.0.2
 radicli==0.0.25
 regex==2024.11.6
 requests==2.32.3
 rich==14.0.0
+safetensors==0.5.3
+scikit-learn==1.6.1
+scipy==1.15.3
+sentence-transformers==2.2.2
+sentencepiece==0.2.0
 setuptools==80.7.1
 shellingham==1.5.4
+six==1.17.0
 smart-open==7.1.0
 sniffio==1.3.1
 spacy==3.7.5
-spacy-curated-transformers==0.3.0
+spacy-curated-transformers==0.2.2
 spacy-legacy==3.0.12
 spacy-llm==0.7.3
 spacy-loggers==1.0.5
@@ -56,15 +76,21 @@ starlette==0.37.2
 sympy==1.14.0
 thinc==8.2.5
 thinc_apple_ops==1.0.0
+threadpoolctl==3.6.0
+tokenizers==0.21.1
 toolz==0.12.1
 torch==2.7.0
+torchvision==0.22.0
 tqdm==4.67.1
+transformers==4.52.1
 typeguard==3.0.2
 typer==0.15.4
 typing-inspection==0.4.0
 typing_extensions==4.13.2
+tzdata==2025.2
 urllib3==2.4.0
 uvicorn==0.34.2
 wasabi==1.1.3
 weasel==0.4.1
 wrapt==1.17.2
+zipp==3.21.0
