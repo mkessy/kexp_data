@@ -9,7 +9,7 @@ __pycache__
 *.pyz
 *.pywz
 /data/**/
-/data/gazetteers/**/
 /models/**/
 /data/prodigy_filters/**/
 /data/prodigy_filters/filter_url_only.py
+/config/gazetteers/

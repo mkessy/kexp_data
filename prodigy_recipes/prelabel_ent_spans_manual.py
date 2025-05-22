@@ -191,12 +191,52 @@ def process_db_stream_with_comment_parser(raw_db_stream: Iterator[Dict[str, Any]
 #         "in", "from", "at", "near", "based", "based in"]}}, {"IS_TITLE": True, "OP": "+"}]}
 # ]
 METADATA_SPANCAT_TAGS_MAP = {
-    "db_artist_name": "ARTIST_NAME_TAG", "db_album_title": "ALBUM_TITLE_TAG",
-    "db_song_title": "SONG_TITLE_TAG", "db_record_label_name": "RECORD_LABEL_NAME_TAG"
+    "db_artist_name": "ARTIST_TAG   ", "db_album_title": "ALBUM_TAG",
+    "db_song_title": "SONG_TAG", "db_record_label_name": "RECORD_LABEL_TAG"
 }
 
+# Default path for gazetteers relative to the workspace root
+# DEFAULT_GAZETTEER_DIR = pathlib.Path("data/gazetteers/") # This will be removed
 
-def add_metadata_spans_and_finalize(stream: Iterable[Dict[str, Any]], nlp: spacy.Language) -> Iterable[Dict[str, Any]]:
+
+def load_gazetteers_to_phrasematcher(nlp: spacy.Language, gazetteer_dir: pathlib.Path) -> PhraseMatcher:
+    """
+    Loads terms from gazetteer JSONL files into a spaCy PhraseMatcher.
+    Assumes gazetteer files are named like 'artist_tag_gazetteer.jsonl'.
+    """
+    matcher = PhraseMatcher(nlp.vocab, attr="LOWER")
+    gazetteer_files = {
+        "ROLE_TAG": gazetteer_dir / "role_tag_gazetteer.jsonl",
+        "GENRE_TAG": gazetteer_dir / "genre_tag_gazetteer.jsonl",
+    }
+
+    for label, filepath in gazetteer_files.items():
+        if filepath.is_file():
+            patterns = []
+            with filepath.open('r', encoding='utf-8') as f:
+                for line in f:
+                    item = json.loads(line)
+                    # Ensure 'pattern' key exists and is a non-empty string
+                    pattern_text = item.get("pattern")
+                    if pattern_text and isinstance(pattern_text, str) and pattern_text.strip():
+                        patterns.append(nlp.make_doc(pattern_text))
+                    else:
+                        logging.warning(
+                            f"RECIPE_GAZ: Invalid or empty pattern in {filepath} for item: {item}")
+            if patterns:
+                matcher.add(label, patterns)
+                logging.info(
+                    f"RECIPE_GAZ: Loaded {len(patterns)} patterns for {label} from {filepath}")
+            else:
+                logging.warning(
+                    f"RECIPE_GAZ: No valid patterns found for {label} in {filepath}")
+        else:
+            logging.warning(
+                f"RECIPE_GAZ: Gazetteer file not found for {label}: {filepath}")
+    return matcher
+
+
+def add_metadata_spans_and_finalize(stream: Iterable[Dict[str, Any]], nlp: spacy.Language, global_gazetteer_matcher: Optional[PhraseMatcher] = None) -> Iterable[Dict[str, Any]]:
     skipped_count = 0
     for task in stream:
         text_content = task.get("text")
@@ -220,6 +260,7 @@ def add_metadata_spans_and_finalize(stream: Iterable[Dict[str, Any]], nlp: spacy
         # Spans will now only come from metadata PhraseMatcher
         all_found_spans = []  # Initialize as empty, no NER spans to inherit
 
+        # 1. Process play-specific metadata matches (current logic)
         metadata_phrase_matcher = PhraseMatcher(nlp.vocab, attr="LOWER")
         patterns_added_to_matcher = False
         for meta_key, label_tag in METADATA_SPANCAT_TAGS_MAP.items():
@@ -252,6 +293,22 @@ def add_metadata_spans_and_finalize(stream: Iterable[Dict[str, Any]], nlp: spacy
                     "start": span.start_char, "end": span.end_char, "label": current_label_tag,
                     # Corrected source
                     "text": span.text, "source": f"meta_{source_meta_field}",
+                    "token_start": span.start, "token_end": span.end - 1
+                })
+
+        # 2. Process global gazetteer matches
+        if global_gazetteer_matcher:
+            global_matches = global_gazetteer_matcher(doc)
+            for match_id_hash, start_token, end_token in global_matches:
+                # This will be "ARTIST_TAG", "ALBUM_TAG", etc.
+                label_from_matcher = nlp.vocab.strings[match_id_hash]
+                # Ensure it's a string
+                current_label_tag = str(label_from_matcher)
+                span = doc[start_token:end_token]
+                all_found_spans.append({
+                    "start": span.start_char, "end": span.end_char, "label": current_label_tag,
+                    # Consistent source format
+                    "text": span.text, "source": f"gazetteer_{current_label_tag.lower()}",
                     "token_start": span.start, "token_end": span.end - 1
                 })
 
@@ -429,15 +486,15 @@ def smart_prelabel_integrated_recipe(
     labels_file: str = "config/labels.txt",
     db_limit: int = 2000,
     db_random_order: bool = False,
-    output_file: Optional[str] = None,
+    output_file: Optional[str] = None
 ):
     """
     Prodigy recipe to:
     1. Fetch raw comments from KEXP DB (via KEXP_DB_PATH env var).
     2. Segment comments and normalize each segment.
-    3. Pre-label NER (LOCATION, DATE) using ProdigyPatternMatcher.
-    4. Pre-label specific SpanCat TAGs from DB metadata using spaCy's PhraseMatcher.
-    Presents a unified interface for NER and SpanCat annotation.
+    3. Pre-label specific SpanCat TAGs from DB metadata using spaCy's PhraseMatcher.
+    4. Pre-label entities from global gazetteers (ARTIST, ALBUM, SONG, ROLE, GENRE).
+    Presents a unified interface for SpanCat annotation.
     """
     nlp = spacy.load(spacy_model)
     db_path = get_db_path_for_recipe()
@@ -455,6 +512,13 @@ def smart_prelabel_integrated_recipe(
             f"RECIPE: No labels found in {labels_file} or file is empty.")
         raise SystemExit(1)
     ui_labels_list = sorted(list(set(ui_labels_list)))  # Deduplicate and sort
+
+    # --- Load Global Gazetteers (path is now hardcoded) ---
+    actual_gazetteer_dir = pathlib.Path("config/gazetteers/")
+    logging.info(
+        f"RECIPE_CONFIG: Attempting to load gazetteers from hardcoded path: {actual_gazetteer_dir.resolve()}")
+    global_entity_matcher = load_gazetteers_to_phrasematcher(
+        nlp, actual_gazetteer_dir)
 
     # --- Determine output file path for processed tasks ---
     final_output_path: Optional[str] = None
@@ -527,7 +591,7 @@ def smart_prelabel_integrated_recipe(
     # 5. Add metadata-based SpanCat TAGs and finalize spans
     # This function now receives the output of add_tokens directly (wrapped for logging)
     final_stream_unlogged = add_metadata_spans_and_finalize(
-        stream_before_metadata_spans, nlp)
+        stream_before_metadata_spans, nlp, global_entity_matcher)
     final_stream_logged_counts = log_stream_counts(
         iter(final_stream_unlogged), "4_finalize_spans")
 
@@ -565,7 +629,7 @@ def smart_prelabel_integrated_recipe(
         # If it can, we need to decide how to handle stream_for_ann_and_file
         # For now, assume final_output_path is always valid and this branch is less likely.
         print("RECIPE_PIPELINE_WARN: final_output_path is not set. Skipping file persistence and ANN indexing.")
-        # To prevent stream_for_ann_and_file from being unconsumed if we want Prodigy to still work:
+        # To prevent stream_for_ann_and_file from being unconsumed if we don't use it for file writing:
         # We must consume it if we don't use it for file writing, otherwise tee can cause issues.
         # However, write_tasks_to_jsonl_and_return_list consumes it.
         # If final_output_path is None, then processed_tasks_list won't be created.
@@ -578,9 +642,12 @@ def smart_prelabel_integrated_recipe(
     label_colors = {
         # "LOCATION": "#FF6347", # REMOVED
         # "DATE": "#4682B4", # REMOVED
-        "ARTIST_NAME_TAG": "#FFD700",
-        "ALBUM_TITLE_TAG": "#ADFF2F", "SONG_TITLE_TAG": "#87CEFA",
-        "RECORD_LABEL_NAME_TAG": "#DA70D6"
+        "ARTIST_TAG": "#FFD700",
+        "ALBUM_TAG": "#ADFF2F",
+        "SONG_TAG": "#87CEFA",
+        "RECORD_LABEL_TAG": "#DA70D6",
+        "ROLE_TAG": "#FF7F50",
+        "GENRE_TAG": "#6495ED",
     }
     default_color = "#D3D3D3"
     custom_colors = {label: label_colors.get(
@@ -592,6 +659,8 @@ def smart_prelabel_integrated_recipe(
         "view_id": "spans_manual",
         "config": {
             "labels": ui_labels_list, "span_labels": ui_labels_list,
+            # Example: Prioritize these if overlaps are tricky
+            "labels_priority": ["ARTIST_TAG", "ALBUM_TAG", "SONG_TAG", "ROLE_TAG", "GENRE_TAG"],
             "exclude_by_input": True, "custom_theme": {"labels": custom_colors},
         },
     }
