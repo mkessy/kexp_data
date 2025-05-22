@@ -9,6 +9,13 @@ from dotenv import load_dotenv
 import logging
 from spacy.matcher import PhraseMatcher
 import pathlib
+import json
+from datetime import datetime
+from itertools import tee
+import json
+from sentence_transformers import SentenceTransformer
+import hnswlib
+from prodigy.components.filters import filter_duplicates
 
 # Import the new parser function
 from src.kexp_processing_utils.comment_parser import parse_comment_to_prodigy_tasks
@@ -228,10 +235,17 @@ def add_metadata_spans_and_finalize(stream: Iterable[Dict[str, Any]], nlp: spacy
         if patterns_added_to_matcher:
             found_phrase_matches = metadata_phrase_matcher(doc)
             for match_id_hash, start_token, end_token in found_phrase_matches:
-                match_id_str = nlp.vocab.strings[match_id_hash]
-                # Split the matcher_key to get the label_tag and source_meta_field
-                current_label_tag, source_meta_field = match_id_str.split(
-                    "::", 1)
+                # Ensure match_id_str is a string and safely attempt to split
+                raw_match_id = nlp.vocab.strings[match_id_hash]
+                match_id_str = str(raw_match_id)  # Cast to string to be safe
+
+                if "::" in match_id_str:
+                    current_label_tag, source_meta_field = match_id_str.split(
+                        "::", 1)
+                else:
+                    logging.warning(
+                        f"RECIPE_FIN: Match ID string '{match_id_str}' (from hash {match_id_hash}, raw_id '{raw_match_id}') does not contain '::'. Skipping span.")
+                    continue
 
                 span = doc[start_token:end_token]
                 all_found_spans.append({
@@ -295,6 +309,106 @@ def log_stream_counts(stream: Iterator[Any], step_name: str) -> Iterator[Any]:
     print(f"RECIPE_STREAM_DEBUG: Step '{step_name}' yielded {count} items.")
 
 
+# --- NEW: Function to write stream to JSONL file and yield tasks ---
+def stream_to_file_and_yield(stream: Iterator[Dict[str, Any]], output_file: Optional[str], step_name: str) -> Iterator[Dict[str, Any]]:
+    """
+    Wraps a stream. If output_file is provided, writes each item to the file (JSONL).
+    Then yields the item, effectively tapping into the stream.
+    """
+    print(
+        f"RECIPE_IO_TAP: Step '{step_name}' is now being tapped. Output file: '{output_file if output_file else 'None'}'")
+    count = 0
+    if output_file:
+        # Ensure the directory for the output file exists
+        output_path = pathlib.Path(output_file)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with output_path.open("w", encoding="utf8") as outfile:
+            for task in stream:
+                outfile.write(json.dumps(task) + "\n")
+                count += 1
+                if count % 200 == 0:
+                    print(
+                        f"RECIPE_IO_TAP: Written {count} tasks to '{output_file}' from step '{step_name}'")
+                yield task
+        print(
+            f"RECIPE_IO_TAP: Finished writing. Total {count} tasks written to '{output_file}' from step '{step_name}'.")
+    else:
+        # If no output file, just pass through the stream and count
+        for task in stream:
+            count += 1
+            # No periodic log here to avoid confusion if file not being written
+            yield task
+        print(
+            f"RECIPE_IO_TAP: Step '{step_name}' (no output file) yielded {count} tasks.")
+
+
+# --- NEW: Helper function to write tasks to JSONL and return them as a list ---
+def write_tasks_to_jsonl_and_return_list(stream: Iterator[Dict[str, Any]], output_jsonl_path: str) -> List[Dict[str, Any]]:
+    """
+    Consumes a stream of tasks, writes each task to a JSONL file,
+    and returns all tasks as a list.
+    """
+    tasks_list = []
+    count = 0
+    output_path = pathlib.Path(output_jsonl_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    print(
+        f"RECIPE_PERSIST: Writing tasks to '{output_jsonl_path}' and collecting list...")
+    with output_path.open("w", encoding="utf8") as outfile:
+        for task in stream:
+            outfile.write(json.dumps(task) + "\n")
+            tasks_list.append(task)
+            count += 1
+            if count % 500 == 0:
+                print(
+                    f"RECIPE_PERSIST: Processed {count} tasks to '{output_jsonl_path}'...")
+    print(
+        f"RECIPE_PERSIST: Finished. Total {count} tasks written to '{output_jsonl_path}' and collected into list.")
+    return tasks_list
+
+# --- NEW: Helper function to build and save ANN index ---
+
+
+def build_and_save_ann_index(tasks: List[Dict[str, Any]], index_path: str, model_name: str = "all-MiniLM-L6-v2"):
+    """
+    Builds an HNSWLib ANN index from the 'text' field of the provided tasks
+    and saves it to the specified path.
+    """
+    if not tasks:
+        print("RECIPE_ANN: No tasks provided to build ANN index. Skipping.")
+        return
+
+    print(
+        f"RECIPE_ANN: Initializing sentence transformer model '{model_name}'...")
+    model = SentenceTransformer(model_name)
+
+    texts = [task.get("text", "") for task in tasks if task.get("text")]
+    if not texts:
+        print("RECIPE_ANN: No text found in tasks to build ANN index. Skipping.")
+        return
+
+    print(
+        f"RECIPE_ANN: Encoding {len(texts)} texts for ANN index. This may take a while...")
+    embeddings = model.encode(texts, show_progress_bar=True)
+
+    dim = embeddings.shape[1]
+    index = hnswlib.Index(space="cosine", dim=dim)
+
+    # Ensure index_path's directory exists
+    index_file_path = pathlib.Path(index_path)
+    index_file_path.parent.mkdir(parents=True, exist_ok=True)
+
+    print(
+        f"RECIPE_ANN: Initializing HNSWLib index at '{index_path}' with {len(embeddings)} elements.")
+    index.init_index(max_elements=len(embeddings), ef_construction=200, M=16)
+    index.add_items(embeddings, ids=list(
+        range(len(embeddings))))  # Simple 0-based IDs
+
+    print(f"RECIPE_ANN: Saving ANN index to '{index_path}'...")
+    index.save_index(index_path)
+    print(f"RECIPE_ANN: ANN index saved successfully.")
+
+
 @prodigy.recipe(
     "kexp.smart_prelabel_v2",
     dataset=("Dataset to save annotations to", "positional", None, str),
@@ -305,7 +419,9 @@ def log_stream_counts(stream: Iterator[Any], step_name: str) -> Iterator[Any]:
     db_limit=("Optional: Limit number of comments from DB (default: 2000)",
               "option", "dbl", int),
     db_random_order=("Fetch comments from DB in random order",
-                     "flag", "dbr", bool)
+                     "flag", "dbr", bool),
+    output_file=("Optional: Path to save all processed tasks to a JSONL file",
+                 "option", "out", Optional[str])
 )
 def smart_prelabel_integrated_recipe(
     dataset: str,
@@ -313,6 +429,7 @@ def smart_prelabel_integrated_recipe(
     labels_file: str = "config/labels.txt",
     db_limit: int = 2000,
     db_random_order: bool = False,
+    output_file: Optional[str] = None,
 ):
     """
     Prodigy recipe to:
@@ -339,12 +456,45 @@ def smart_prelabel_integrated_recipe(
         raise SystemExit(1)
     ui_labels_list = sorted(list(set(ui_labels_list)))  # Deduplicate and sort
 
+    # --- Determine output file path for processed tasks ---
+    final_output_path: Optional[str] = None
+    if output_file:  # User provided a specific path
+        final_output_path = output_file
+        print(
+            f"RECIPE_CONFIG: User specified output file: {final_output_path}")
+    else:  # No output_file provided, use default location and name
+        default_dir = pathlib.Path(
+            "/Users/pooks/Dev/kexp_data/data/processed_examples/")
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        default_filename = f"{dataset}_examples_{timestamp}.jsonl"
+        # Convert Path object to string
+        final_output_path = str(default_dir / default_filename)
+        print(
+            f"RECIPE_CONFIG: No output file specified by user. Defaulting to: {final_output_path}")
+
+    # The stream_to_file_and_yield function will handle directory creation if needed for final_output_path
+
     # --- Stream Processing Pipeline ---
     # 1. Fetch raw comments from DB
     raw_comment_stream_unlogged = fetch_raw_comments_from_db(
         db_path, limit=db_limit, random_order=db_random_order)
+    raw_comment_stream_with_counts_pre_filter = log_stream_counts(
+        raw_comment_stream_unlogged, "0a_fetch_raw_db_unfiltered")
+
+    # 1b. Hash raw comments based on their text content and filter duplicates
+    def hash_raw_comments(stream: Iterator[Dict[str, Any]]) -> Iterator[Dict[str, Any]]:
+        for eg in stream:
+            # Set hashes based on the raw comment text only for initial de-duplication
+            # The key "text" here refers to the raw comment text from the DB
+            yield set_hashes(eg, input_keys=("text",), task_keys=())
+
+    hashed_raw_comment_stream = hash_raw_comments(
+        raw_comment_stream_with_counts_pre_filter)
+    deduplicated_raw_comment_stream_unlogged = filter_duplicates(
+        hashed_raw_comment_stream, by_input=True, by_task=False)
+
     raw_comment_stream = log_stream_counts(
-        raw_comment_stream_unlogged, "0_fetch_raw_db")
+        deduplicated_raw_comment_stream_unlogged, "0b_fetch_raw_db_filtered_deduped")
 
     # 2. Use comment_parser to get Prodigy tasks from raw comments
     parsed_task_stream_unlogged = process_db_stream_with_comment_parser(
@@ -378,8 +528,52 @@ def smart_prelabel_integrated_recipe(
     # This function now receives the output of add_tokens directly (wrapped for logging)
     final_stream_unlogged = add_metadata_spans_and_finalize(
         stream_before_metadata_spans, nlp)
-    final_stream = log_stream_counts(
+    final_stream_logged_counts = log_stream_counts(
         iter(final_stream_unlogged), "4_finalize_spans")
+
+    # --- NEW: Split stream, save to file, build ANN index, and serve to Prodigy ---
+    # final_stream_for_prodigy = stream_to_file_and_yield( # OLD LINE TO BE REMOVED
+    #     final_stream_logged_counts, # OLD LINE TO BE REMOVED
+    #     final_output_path,  # MODIFIED to use the determined path # OLD LINE TO BE REMOVED
+    #     step_name="5_final_stream_to_prodigy_and_file" # OLD LINE TO BE REMOVED
+    # ) # OLD LINE TO BE REMOVED
+
+    # 1. Split the final processed stream
+    print(f"RECIPE_PIPELINE: Splitting final stream for ANN indexing/file saving and Prodigy UI.")
+    stream_for_ann_and_file, stream_for_prodigy = tee(
+        final_stream_logged_counts, 2)
+
+    # 2. Persist tasks to JSONL and get them as a list
+    # final_output_path is already determined earlier in the recipe
+    if final_output_path:
+        print(
+            f"RECIPE_PIPELINE: Persisting tasks to {final_output_path} and collecting for ANN index.")
+        processed_tasks_list = write_tasks_to_jsonl_and_return_list(
+            stream_for_ann_and_file,
+            final_output_path
+        )
+
+        # 3. Build and save ANN index
+        # Derive ANN index path from the JSONL output path
+        ann_index_path = str(pathlib.Path(
+            final_output_path).with_suffix('.ann_index'))
+        print(
+            f"RECIPE_PIPELINE: Building and saving ANN index to {ann_index_path}.")
+        build_and_save_ann_index(processed_tasks_list, ann_index_path)
+    else:
+        # This case should ideally not happen if final_output_path is always set (e.g. to a default)
+        # If it can, we need to decide how to handle stream_for_ann_and_file
+        # For now, assume final_output_path is always valid and this branch is less likely.
+        print("RECIPE_PIPELINE_WARN: final_output_path is not set. Skipping file persistence and ANN indexing.")
+        # To prevent stream_for_ann_and_file from being unconsumed if we want Prodigy to still work:
+        # We must consume it if we don't use it for file writing, otherwise tee can cause issues.
+        # However, write_tasks_to_jsonl_and_return_list consumes it.
+        # If final_output_path is None, then processed_tasks_list won't be created.
+        # And build_and_save_ann_index won't be called.
+        # stream_for_prodigy will still work.
+        # If we *really* wanted to drain stream_for_ann_and_file without writing:
+        # for _ in stream_for_ann_and_file: pass
+        pass
 
     label_colors = {
         # "LOCATION": "#FF6347", # REMOVED
@@ -393,7 +587,9 @@ def smart_prelabel_integrated_recipe(
         label, default_color) for label in ui_labels_list}
 
     return {
-        "dataset": dataset, "stream": final_stream, "view_id": "spans_manual",
+        "dataset": dataset,
+        "stream": stream_for_prodigy,  # MODIFIED to use the tee'd stream for Prodigy
+        "view_id": "spans_manual",
         "config": {
             "labels": ui_labels_list, "span_labels": ui_labels_list,
             "exclude_by_input": True, "custom_theme": {"labels": custom_colors},
