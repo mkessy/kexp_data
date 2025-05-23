@@ -10,56 +10,7 @@ import yaml
 # Adjust paths if necessary, or consider making them installable modules
 # For now, let's assume they can be called as subprocesses or imported if structured as such.
 
-# Placeholder for a utility function to load the consolidated schema
-
-
-def load_annotation_schema(schema_path):
-    """Loads the consolidated annotation schema YAML file."""
-    if not os.path.exists(schema_path):
-        print(f"Error: Annotation schema file not found at {schema_path}")
-        sys.exit(1)
-    with open(schema_path, 'r') as f:
-        try:
-            schema = yaml.safe_load(f)
-            # Basic validation (more in validate_schema.py)
-            if 'schema_version' not in schema or 'labels' not in schema:
-                print(
-                    f"Error: Invalid schema format in {schema_path}. Missing 'schema_version' or 'labels'.")
-                sys.exit(1)
-            return schema
-        except yaml.YAMLError as e:
-            print(f"Error parsing YAML schema file {schema_path}: {e}")
-            sys.exit(1)
-
-# Placeholder for a utility function to update the dataset registry
-
-
-def update_dataset_registry(registry_path, dataset_info):
-    """Updates the dataset registry CSV file."""
-    header = "prodigy_dataset_name,campaign_name,creation_date,status,input_examples_file,ann_index_file,prodigy_export_file,annotation_schema_version,description,source_prodigy_datasets_merged"
-
-    # Ensure all fields are present in dataset_info, use N/A for missing ones
-    row_data = [
-        dataset_info.get('prodigy_dataset_name', 'N/A'),
-        dataset_info.get('campaign_name', 'N/A'),
-        dataset_info.get('creation_date', 'N/A'),
-        dataset_info.get('status', 'N/A'),
-        dataset_info.get('input_examples_file', 'N/A'),
-        dataset_info.get('ann_index_file', 'N/A'),
-        dataset_info.get('prodigy_export_file', 'N/A'),
-        dataset_info.get('annotation_schema_version', 'N/A'),
-        dataset_info.get('description', 'N/A'),
-        dataset_info.get('source_prodigy_datasets_merged', 'N/A')
-    ]
-
-    # Check if file exists to write header or append
-    file_exists = os.path.isfile(registry_path)
-    with open(registry_path, 'a', newline='') as f:
-        # Using csv.writer could be more robust, but for simple append:
-        if not file_exists or os.path.getsize(registry_path) == 0:
-            f.write(header + '\n')
-        f.write(",".join(map(str, row_data)) + '\n')
-    print(f"Dataset registry updated: {registry_path}")
+from scripts.utilities.common_utils import load_annotation_schema, update_dataset_registry
 
 
 def main():

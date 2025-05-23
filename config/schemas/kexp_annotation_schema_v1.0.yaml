@@ -1,13 +1,14 @@
 schema_version: "1.0"
 date: "2024-07-15"
-description: "Consolidated annotation schema for KEXP DJ comments. Contains all label definitions, detailed guidelines, and illustrative examples. Derived from label_definitions_v1.0.yaml and annotation_guidelines_v1.0.yaml, and docs/annotation_schema.md v4.0."
+description: "Consolidated annotation schema for KEXP DJ comments. Contains all label definitions, detailed guidelines, and illustrative examples. Derived from label_definitions_v1.0.yaml, annotation_guidelines_v1.0.yaml, and docs/annotation_schema.md v4.0."
 
 general_annotation_rules:
   - rule: "Annotate based on explicit information in the text."
   - rule: "If unsure, do not annotate and flag the example if possible."
   - rule: "Span boundaries should be minimal but complete, capturing the entire relevant phrase or thought."
   - rule: "Labels ending in _SPAN typically cover sentences or multi-sentence passages. Labels ending in _TAG are for shorter, specific entity phrases."
-  # ... more general rules can be added as conventions emerge
+  - rule: "When annotating _TAG entities within a _SPAN, ensure the _TAG is also independently valid according to its own definition."
+  - rule: "Avoid annotating possessive forms for tags (e.g., for ARTIST_TAG, annotate 'Nirvana' in 'Nirvana's song', not 'Nirvana's')."
 
 workflow_overview:
   segmentation_notes: "Comments are pre-segmented. Annotate within these segments."
@@ -21,21 +22,23 @@ labels:
       - Capture general biographical details.
       - Exclude specific origin statements (use ARTIST_LOC_ORGIN_SPAN).
       - Exclude alias definitions (use ARTIST_ALIAS_SPAN).
-      - **Process Note**: Prioritize capturing complete thoughts or facts. If a bio spans multiple sentences, try to capture all related ones if coherent. These spans often involve details like artist roles, locations, dates, and associated genres.
+      - Typically contains entities like ARTIST_TAG, ROLE_TAG, LOC_TAG, DATE_TAG, GENRE_TAG.
+      - **Process Note**: Prioritize capturing complete thoughts or facts. If a bio spans multiple sentences, try to capture all related ones if coherent.
     examples:
       - text: "John Heathers aka BigFox is a DJ/Producer/multi-instrumentalist who grew up in Bamako. He works there with his momma and his big dog leo"
         results:
           [
             "John Heathers aka BigFox is a DJ/Producer/multi-instrumentalist who grew up in Bamako. He works there with his momma and his big dog leo",
           ]
-        reason: "Describes artist's profession, upbringing, and personal life details."
+        reason: "Describes artist's profession, upbringing, and personal life details, excluding the alias part which would be ARTIST_ALIAS_SPAN if the alias definition was the focus."
 
   - name: "ARTIST_LOC_ORGIN_SPAN"
     description: "A phrase or sentence specifically stating an artist's geographical origin, where they are primarily based, or a descriptive phrase linking them to a location and often a genre/role."
     guidance: |
       - Focus on explicit statements of geographical origin or primary base.
       - Include descriptive phrases linking artists to locations if origin-related.
-      - **Process Note**: Ensure the span distinctly captures the artist's geographical origin or primary base, often including their name, the location, and sometimes their role or genre linked to that origin.
+      - Typically contains entities like ARTIST_TAG, LOC_TAG, ROLE_TAG, GENRE_TAG.
+      - **Process Note**: Ensure the span distinctly captures the artist's geographical origin or primary base.
     examples:
       - text: "Seattle post-punk band The Rangers"
         results: ["Seattle post-punk band The Rangers"]
@@ -48,30 +51,32 @@ labels:
           [
             "Parcels are an Australian band originally from Byron Bay, now based in Berlin.",
           ]
-        reason: "States multiple origin/based locations."
+        reason: "States multiple origin/based locations for the artist."
 
   - name: "ARTIST_ALIAS_SPAN"
     description: "A phrase or sentence that explicitly states an alias, pseudonym, stage name, or a 'known as' name for an artist."
     guidance: |
       - Capture explicit definitions of alternative artist names.
-      - **Process Note**: Ensure the span captures both the original name and the alias if the text presents them as part of the alias definition (e.g., 'Artist A aka Artist B').
+      - Typically contains multiple ARTIST_TAGs (the real name and the alias).
+      - **Process Note**: Ensure the span captures both the original name and the alias if the text presents them as part of the alias definition.
     examples:
-      - text: "John Heathers aka BigFox"
+      - text: "John Heathers aka BigFox is a DJ."
         results: ["John Heathers aka BigFox"]
-        reason: "Explicit 'aka' statement."
-      - text: "Rita Jones performs as METRONOME"
+        reason: "Explicit 'aka' statement defining an alias."
+      - text: "Rita Jones performs as METRONOME on this track."
         results: ["Rita Jones performs as METRONOME"]
-        reason: "Explicit 'performs as' statement."
-      - text: "Beatrice Laus, known professionally as beabadoobee"
+        reason: "Explicit 'performs as' statement defining an alias."
+      - text: "Beatrice Laus, known professionally as beabadoobee, released a new song."
         results: ["Beatrice Laus, known professionally as beabadoobee"]
-        reason: "Explicit 'known professionally as' statement."
+        reason: "Explicit 'known professionally as' statement defining an alias."
 
   - name: "NEW_RELEASE_SPAN"
     description: "A sentence or sentences specifically announcing an upcoming or new musical release (album, EP, single, etc.), often including its title, the artist's release count, and an explicit release date or timeframe."
     guidance: |
       - Identify announcements of new or upcoming releases.
       - Look for release titles, artist's release history (e.g., 'third album'), and dates/timeframes.
-      - **Process Note**: The span should include key details of the announcement, such as the release title (album/song), artist name, and any specified release dates or timeframes (e.g., 'next month', 'upcoming').
+      - Typically contains entities like ALBUM_TAG (or SONG_TAG for singles), ARTIST_TAG, DATE_TAG.
+      - **Process Note**: The span should include key details of the announcement.
     examples:
       - text: "Their new album, 'Cosmic Echoes', is their third studio effort and is slated for release on October 26th."
         results:
@@ -91,7 +96,8 @@ labels:
     guidance: |
       - Identify statements about the source of a song being discussed or played.
       - Look for links to albums, release years, or song status.
-      - **Process Note**: Ensure the span clearly connects the song to its source, which might include the album title, artist name, and release year/date.
+      - Typically contains entities like SONG_TAG, ALBUM_TAG, ARTIST_TAG, DATE_TAG.
+      - **Process Note**: Ensure the span clearly connects the song to its source.
     examples:
       - text: "That was 'Starman' from David Bowie's 1972 classic album 'The Rise and Fall of Ziggy Stardust and the Spiders from Mars'."
         results:
@@ -110,7 +116,8 @@ labels:
     description: "A sentence or multi-sentence passage describing the sound, style, musical characteristics, or general lyrical themes of an album, song, or artist's musical output."
     guidance: |
       - Capture descriptions of musical style, sound, or lyrical themes.
-      - **Process Note**: These spans often describe various musical aspects (genre, instruments, style, lyrical themes). Aim for completeness in capturing the entire descriptive passage related to the sound.
+      - Typically contains entities like GENRE_TAG, INSTRUMENT_TAG, ARTIST_TAG, ALBUM_TAG, SONG_TAG.
+      - **Process Note**: Aim for completeness in capturing the entire descriptive passage related to the sound.
     examples:
       - text: "The debut album from this Portland-based, Nashville-born artist is an often-poignant set of well-crafted folk-pop with a lush sound combining guitars, mandolin, strings, horns, woodwinds, field recordings and more with his serene vocals and evocative lyrics exploring his family heritage, racism and the hardships of immigration."
         results:
@@ -123,7 +130,8 @@ labels:
     description: "A sentence or phrase that explicitly mentions lyrical themes, conceptual inspirations, or the story/meaning behind a specific song or album. More focused than SOUND_DESCRIPTION_SPAN."
     guidance: |
       - Look for explicit mentions of themes, inspirations, or meanings of songs/albums.
-      - **Process Note**: Focus on capturing the explicit connection made in the text between a musical work (song/album) and its stated theme, inspiration, or meaning.
+      - Typically contains entities like ALBUM_TAG or SONG_TAG, and descriptive text.
+      - **Process Note**: Focus on capturing the explicit connection made in the text between a musical work and its stated theme.
     examples:
       - text: "He mentioned the entire album is a concept piece about the migratory patterns of birds."
         results:
@@ -142,20 +150,22 @@ labels:
     description: "A span capturing an artist/group's attributed statement (a direct or reported quote). This includes the quoted text and often the context of the statement."
     guidance: |
       - Identify direct or reported quotes attributed to an artist.
-      - **Process Note**: Ensure the span includes both the speaker (artist name/tag) and the full quoted text. The attribution to the artist should be clear.
+      - Typically contains an ARTIST_TAG (speaker) and the actual quoted text.
+      - **Process Note**: Ensure the span includes both the speaker and the full quoted text.
     examples:
       - text: 'Björk stated in a recent interview, "Nature is my biggest inspiration."'
         results:
           [
             'Björk stated in a recent interview, "Nature is my biggest inspiration."',
           ]
-        reason: "Direct quote attributed to an artist."
+        reason: "Direct quote attributed to an artist including the attribution phrase."
 
   - name: "GROUP_COMP_SPAN"
     description: "A sentence or sentences listing or describing the members of a group/band, often including their roles or instruments."
     guidance: |
       - Look for listings or descriptions of band members and their roles/instruments.
-      - **Process Note**: Aim to capture all mentioned members of the group and their roles or instruments within the single span describing the group's composition.
+      - Typically contains ARTIST_TAG (for group and individual members), ROLE_TAG, INSTRUMENT_TAG.
+      - **Process Note**: Aim to capture all mentioned members and their roles/instruments within the span.
     examples:
       - text: "The supergroup consists of Alice Alpha on vocals, Bob Beta on guitar, and Charlie Gamma on drums."
         results:
@@ -168,53 +178,57 @@ labels:
     description: "Specifically captures a collaboration between distinct artists/groups on a song, album, or performance."
     guidance: |
       - Identify mentions of collaborations between different artists/groups.
-      - **Process Note**: Ensure all mentioned collaborating artists/groups are included in the span, along with the specific work (song/album) if specified as part of the collaboration.
+      - Typically contains multiple ARTIST_TAGs, and potentially SONG_TAG or ALBUM_TAG.
+      - **Process Note**: Ensure all mentioned collaborating artists/groups are included.
     examples:
       - text: "This track is a collaboration between DJ Shadow and Run the Jewels."
         results:
           [
             "This track is a collaboration between DJ Shadow and Run the Jewels.",
           ]
-        reason: "Explicitly states a collaboration between artists."
-      - text: '"The Medium" features Unknown Mortal Orchestra''s Ruban Nielson on lead guitar...'
+        reason: "Explicitly states a collaboration between artists for a track."
+      - text: '"The Medium" features Unknown Mortal Orchestra''s Ruban Nielson on lead guitar from their latest album.'
         results:
           [
-            '"The Medium" features Unknown Mortal Orchestra''s Ruban Nielson on lead guitar...',
+            '"The Medium" features Unknown Mortal Orchestra''s Ruban Nielson on lead guitar',
           ]
-        reason: "Mentions a featured artist on a track."
+        reason: "Mentions a featured artist on a track, including their role."
 
   - name: "INFLUENCE_MENTION_SPAN"
     description: "A sentence or phrase stating that an artist, song, or album is influenced by another artist, work, or genre."
     guidance: |
       - Look for statements of influence from one artist/work/genre to another.
-      - **Process Note**: Capture both parties of the influence relationship (the influenced and the influencer - artist, work, or genre) and the subject matter if specified.
+      - Typically contains ARTIST_TAG (both influenced and influencer), SONG_TAG, ALBUM_TAG, GENRE_TAG.
+      - **Process Note**: Capture both parties of the influence relationship.
     examples:
       - text: "Her vocal style is heavily influenced by Billie Holiday."
         results: ["Her vocal style is heavily influenced by Billie Holiday."]
-        reason: "States influence from another artist."
+        reason: "States influence from another artist on vocal style."
       - text: "You can hear a clear homage to Kraftwerk in their synth lines."
         results:
           ["You can hear a clear homage to Kraftwerk in their synth lines."]
-        reason: "Implies influence by mentioning homage."
+        reason: "Implies influence by mentioning homage to another artist in a musical element."
 
   - name: "RECORD_LABEL_SPAN"
     description: "A sentence or sentences providing information about a record label in relation to an artist or release, beyond just mentioning the name (which would be RECORD_LABEL_TAG)."
     guidance: |
-      - Capture information about a record label's involvement with an artist or release, not just the label name.
-      - **Process Note**: This span should describe the relationship or interaction with the record label (e.g., signing, funding), not just a passing mention of the label's name.
+      - Capture information about a record label's involvement, not just the name.
+      - Typically contains RECORD_LABEL_TAG, ARTIST_TAG, ALBUM_TAG.
+      - **Process Note**: This span should describe the relationship or interaction.
     examples:
       - text: "Their early demos were picked up by IndieGiant Records, who then funded their first two albums."
         results:
           [
             "Their early demos were picked up by IndieGiant Records, who then funded their first two albums.",
           ]
-        reason: "Describes label's role in artist's career."
+        reason: "Describes label's role (signing, funding) in artist's career."
 
   - name: "SHOW_DATE_SPAN"
     description: "A sentence or clause detailing one or more upcoming or past shows for an artist, including dates, venues, and locations."
     guidance: |
-      - Identify details of artist performances, including dates, venues, and locations.
-      - **Process Note**: Be mindful of relative dates (e.g., 'next Tuesday') and ensure context is captured. The span should ideally include artist, venue, location, and date details for the performance(s).
+      - Identify details of artist performances: dates, venues, locations.
+      - Typically contains ARTIST_TAG, VENUE_TAG, LOC_TAG, DATE_TAG, EVENT_TAG (if part of a named tour/festival).
+      - **Process Note**: Be mindful of relative dates; ensure context is captured.
     examples:
       - text: "The Beatles are playing in Seattle at Neumos on Jan 23 and in Portland at the Shithole on Feb 21."
         results:
@@ -233,38 +247,42 @@ labels:
     description: "A phrase, often including a URL or a call to action, directing listeners to find more information, listen to archives, or visit a website."
     guidance: |
       - Look for calls to action or URLs directing to more information.
-      - **Process Note**: Ensure the span captures the full call to action phrase or the complete URL provided for finding more information.
+      - Typically contains URLs, phrases like "listen here", "find out more".
+      - **Process Note**: Capture the full call to action phrase or the complete URL.
     examples:
       - text: "For more details on their tour, visit their website at artist.com."
         results:
           ["For more details on their tour, visit their website at artist.com."]
-        reason: "Directs to website for more info."
-      - text: "You can watch the music video here: [URL]"
-        results: ["You can watch the music video here: [URL]"]
+        reason: "Directs to website for more info, including the URL."
+      - text: "You can watch the music video here: www.example.com/video123"
+        results:
+          ["You can watch the music video here: www.example.com/video123"]
         reason: "Provides a link to a music video."
 
   - name: "ARTIST_TAG"
     description: "The name of a musical artist, band, or group."
     guidance: |
       - Annotate full names of artists, bands, or groups.
-      - Include common aliases if directly mentioned as such and part of the name being identified.
-      - Do not annotate possessive forms (e.g., "artist's song").
+      - Include common aliases if directly mentioned as such and part of the name being identified (e.g., if "BigFox" is used standalone as the artist name).
+      - Do not annotate possessive forms (e.g., "artist's song" - annotate 'artist', not 'artist's').
+      - **Process Note**: If an artist has multiple common spellings, prefer the one most frequently used by KEXP sources (if known, otherwise use text).
+      - **Edge Case**: For collaborations like "Artist A ft. Artist B", tag both "Artist A" and "Artist B" individually if appropriate for the task.
     examples:
-      - text: "Fleetwood Mac" # Assuming this was a text snippet where "Fleetwood Mac" was the full context and the annotation.
+      - text: "Music by Fleetwood Mac."
         results: ["Fleetwood Mac"]
         reason: "Direct mention of band name."
-      - text: "Parcels"
+      - text: "The new single from Parcels is out."
         results: ["Parcels"]
         reason: "Direct mention of band name."
-      - text: "beabadoobee"
+      - text: "beabadoobee will be touring next year."
         results: ["beabadoobee"]
         reason: "Direct mention of artist name."
-      - text: "John Heathers"
+      - text: "A classic track by John Heathers."
         results: ["John Heathers"]
         reason: "Direct mention of artist name."
-      - text: "BigFox (if referred to as an artist)" # This example is a bit meta; ideally the 'text' field would be a sentence where 'BigFox' is used.
-        results: ["BigFox"] # Placeholder, original 'text_snippet' was just 'BigFox (...)'
-        reason: "Alias used as artist name."
+      - text: "This is BigFox on the decks."
+        results: ["BigFox"]
+        reason: "Alias used as artist name in context."
 
   - name: "ALBUM_TAG"
     description: "The title of an album or EP."
@@ -272,34 +290,35 @@ labels:
       - Annotate official titles of albums or EPs.
       - Include subtitles if part of the official title.
     examples:
-      - text: "Rumours"
+      - text: "Their classic album Rumours."
         results: ["Rumours"]
         reason: "Direct mention of album title."
-      - text: "LOVED"
+      - text: "The latest release, LOVED, is now available."
         results: ["LOVED"]
         reason: "Direct mention of album title."
-      - text: "Kala"
+      - text: "She performed songs from Kala."
         results: ["Kala"]
         reason: "Direct mention of album title."
-      - text: "MAHAL"
+      - text: "He played a track from MAHAL."
         results: ["MAHAL"]
         reason: "Direct mention of album title."
-      - text: "'The Dark Side of the Moon'"
-        results: ["'The Dark Side of the Moon'"] # Or possibly just "The Dark Side of the Moon" depending on annotation convention for quotes
-        reason: "Album title in quotes."
+      - text: "Remember Pink Floyd's 'The Dark Side of the Moon'?"
+        results: ["The Dark Side of the Moon"]
+        reason: "Album title mentioned with surrounding quotes."
 
   - name: "SONG_TAG"
     description: "The title of a song."
     guidance: |
       - Annotate official titles of songs.
+      - Be careful with common phrases that might also be song titles; context is key.
     examples:
-      - text: "Go Your Own Way"
+      - text: "Playing 'Go Your Own Way' next."
         results: ["Go Your Own Way"]
-        reason: "Direct mention of song title."
-      - text: "Mountain Song"
+        reason: "Direct mention of song title, typically in quotes."
+      - text: "That was Mountain Song by Jane's Addiction."
         results: ["Mountain Song"]
         reason: "Direct mention of song title."
-      - text: "Bird Flu"
+      - text: "Up next is Bird Flu by M.I.A."
         results: ["Bird Flu"]
         reason: "Direct mention of song title."
 
@@ -308,10 +327,10 @@ labels:
     guidance: |
       - Annotate names of record labels.
     examples:
-      - text: "Sub Pop Records"
+      - text: "Released on Sub Pop Records."
         results: ["Sub Pop Records"]
         reason: "Full name of record label."
-      - text: "Merge Records"
+      - text: "They signed to Merge Records."
         results: ["Merge Records"]
         reason: "Full name of record label."
 
@@ -320,40 +339,40 @@ labels:
     guidance: |
       - Annotate explicit mentions of musical genres or styles.
     examples:
-      - text: "rock"
+      - text: "A classic rock anthem."
         results: ["rock"]
         reason: "Musical genre."
-      - text: "post-punk"
+      - text: "Some great post-punk from the UK."
         results: ["post-punk"]
         reason: "Musical genre."
-      - text: "J-Pop"
+      - text: "She's known for her J-Pop hits."
         results: ["J-Pop"]
         reason: "Musical genre."
-      - text: "shoegaze"
+      - text: "Listening to some dreamy shoegaze."
         results: ["shoegaze"]
         reason: "Musical genre."
-      - text: "indiepop"
+      - text: "An indiepop band from Sweden."
         results: ["indiepop"]
         reason: "Musical genre."
 
   - name: "ROLE_TAG"
     description: "A short span explicitly naming an artist's role, profession, or primary instrument if used as a role."
     guidance: |
-      - Annotate artist's stated profession, role in a band, or primary instrument if it defines their role.
+      - Annotate artist's stated profession, role in a band, or primary instrument if it defines their role (e.g., "the guitarist for the band").
     examples:
-      - text: "producer"
+      - text: "She is the main producer for the group."
         results: ["producer"]
         reason: "Artist's role."
-      - text: "DJ"
+      - text: "As a DJ, he tours worldwide."
         results: ["DJ"]
         reason: "Artist's role."
-      - text: "vocalist"
+      - text: "The lead vocalist has a unique style."
         results: ["vocalist"]
         reason: "Artist's role."
-      - text: "guitarist"
+      - text: "He is the guitarist for the band."
         results: ["guitarist"]
         reason: "Artist's role/instrument."
-      - text: "multi-instrumentalist"
+      - text: "Known as a versatile multi-instrumentalist."
         results: ["multi-instrumentalist"]
         reason: "Artist's role."
 
@@ -362,17 +381,17 @@ labels:
     guidance: |
       - Annotate names of specific music-related events.
     examples:
-      - text: "Coachella 2023"
+      - text: "They played at Coachella 2023."
         results: ["Coachella 2023"]
         reason: "Named festival with year."
-      - text: "Lollapalooza"
+      - text: "Tickets for Lollapalooza are on sale."
         results: ["Lollapalooza"]
         reason: "Named festival."
-      - text: "KEXP's Audioasis"
-        results: ["KEXP's Audioasis"] # Escaped apostrophe
+      - text: "Tune in for KEXP's Audioasis tonight."
+        results: ["KEXP's Audioasis"]
         reason: "Named recurring show series."
-      - text: "The 'Endless Summer' Tour"
-        results: ["The 'Endless Summer' Tour"] # Escaped apostrophes
+      - text: "Announcing The 'Endless Summer' Tour!"
+        results: ["The 'Endless Summer' Tour"]
         reason: "Named tour."
 
   - name: "VENUE_TAG"
@@ -380,34 +399,34 @@ labels:
     guidance: |
       - Annotate names of specific performance venues.
     examples:
-      - text: "Neumos"
+      - text: "Live at Neumos tonight."
         results: ["Neumos"]
         reason: "Named venue."
-      - text: "The Fillmore"
+      - text: "Playing a show at The Fillmore."
         results: ["The Fillmore"]
         reason: "Named venue."
-      - text: "KEXP studio"
+      - text: "Recorded live in the KEXP studio."
         results: ["KEXP studio"]
         reason: "Named place of performance."
 
   - name: "INSTRUMENT_TAG"
     description: "A short span naming a musical instrument, a specific vocal style, or a distinct sound element."
     guidance: |
-      - Annotate names of musical instruments or specific sound elements.
+      - Annotate names of musical instruments or specific sound elements/vocal styles if explicitly mentioned.
     examples:
-      - text: "guitars"
+      - text: "Featuring heavy guitars and drums."
         results: ["guitars"]
-        reason: "Musical instrument."
-      - text: "mandolin"
+        reason: "Musical instrument. (Example shows one, but 'drums' could also be tagged)"
+      - text: "The track includes a mandolin solo."
         results: ["mandolin"]
         reason: "Musical instrument."
-      - text: "serene vocals"
+      - text: "Her serene vocals are a highlight."
         results: ["serene vocals"]
         reason: "Specific vocal style."
-      - text: "drum machine"
+      - text: "Driven by a classic drum machine beat."
         results: ["drum machine"]
         reason: "Musical instrument/equipment."
-      - text: "synthesizer"
+      - text: "Layered with a warm synthesizer pad."
         results: ["synthesizer"]
         reason: "Musical instrument."
 
@@ -416,57 +435,57 @@ labels:
     guidance: |
       - Annotate names of recording studios.
     examples:
-      - text: "Abbey Road Studios"
+      - text: "Recorded at Abbey Road Studios."
         results: ["Abbey Road Studios"]
         reason: "Named recording studio."
-      - text: "Electric Lady Studios"
+      - text: "Mixed in Electric Lady Studios."
         results: ["Electric Lady Studios"]
         reason: "Named recording studio."
 
   - name: "LOC_TAG"
     description: "A short span naming a geographical location (city, state, country, region)."
     guidance: |
-      - Annotate names of geographical locations.
+      - Annotate names of geographical locations. This can include cities, states, countries, regions, or demonyms used as location identifiers.
     examples:
-      - text: "Seattle"
+      - text: "Coming to you live from Seattle."
         results: ["Seattle"]
         reason: "City name."
-      - text: "Brooklyn"
+      - text: "A band from Brooklyn."
         results: ["Brooklyn"]
         reason: "Borough/City district name."
-      - text: "Kobe, Japan"
+      - text: "They are touring Kobe, Japan."
         results: ["Kobe, Japan"]
         reason: "City and country."
-      - text: "Byron Bay"
+      - text: "Originally from Byron Bay."
         results: ["Byron Bay"]
         reason: "Town name."
-      - text: "Australian"
+      - text: "Many Australian bands are popular now."
         results: ["Australian"]
         reason: "Nationality/Regional identifier used as location."
 
   - name: "DATE_TAG"
     description: "A short span representing a specific date, year, decade, or relative time expression."
     guidance: |
-      - Annotate specific dates, years, decades, or relative time expressions like 'today', 'next month'.
+      - Annotate specific dates (e.g. "October 26th", "Jan 23"), years (e.g. "1960", "2022"), decades (e.g. "the 90's"), or relative time expressions (e.g. "today", "next month", "forthcoming").
     examples:
-      - text: "1960"
+      - text: "Released in 1960."
         results: ["1960"]
         reason: "Year."
-      - text: "October 26th"
+      - text: "The show is on October 26th."
         results: ["October 26th"]
         reason: "Specific date."
-      - text: "next month"
+      - text: "Album due next month."
         results: ["next month"]
         reason: "Relative time expression."
-      - text: "Jan 23"
+      - text: "Concert on Jan 23."
         results: ["Jan 23"]
-        reason: "Specific date."
-      - text: "2022"
+        reason: "Specific date (month and day)."
+      - text: "Back in 2022, they released..."
         results: ["2022"]
         reason: "Year."
-      - text: "the 90's"
-        results: ["the 90's"] # Escaped apostrophe
+      - text: "Music from the 90's."
+        results: ["the 90's"]
         reason: "Decade."
-      - text: "TODAY"
+      - text: "Available TODAY!"
         results: ["TODAY"]
-        reason: "Relative time expression."
+        reason: "Relative time expression (all caps)."

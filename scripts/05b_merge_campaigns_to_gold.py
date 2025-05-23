@@ -9,66 +9,7 @@ from collections import defaultdict
 # Assuming load_annotation_schema and update_dataset_registry might be shared
 # For now, keep update_dataset_registry here, or move to a common util file later.
 
-# Placeholder for a utility function to load the consolidated schema (copied for now)
-
-
-def load_annotation_schema(schema_path):
-    """Loads the consolidated annotation schema YAML file."""
-    if not os.path.exists(schema_path):
-        print(f"Error: Annotation schema file not found at {schema_path}")
-        sys.exit(1)
-    with open(schema_path, 'r') as f:
-        try:
-            schema = yaml.safe_load(f)
-            if 'schema_version' not in schema or 'labels' not in schema:
-                print(
-                    f"Error: Invalid schema format in {schema_path}. Missing 'schema_version' or 'labels'.")
-                sys.exit(1)
-            return schema
-        except yaml.YAMLError as e:
-            print(f"Error parsing YAML schema file {schema_path}: {e}")
-            sys.exit(1)
-
-# Placeholder for a utility function to update the dataset registry (copied for now)
-
-
-def update_dataset_registry(registry_path, dataset_info):
-    """Updates the dataset registry CSV file."""
-    header = "prodigy_dataset_name,campaign_name,creation_date,status,input_examples_file,ann_index_file,prodigy_export_file,annotation_schema_version,description,source_prodigy_datasets_merged"
-    row_data = [
-        dataset_info.get('prodigy_dataset_name', 'N/A'),
-        dataset_info.get('campaign_name', 'N/A'),
-        dataset_info.get('creation_date', 'N/A'),
-        dataset_info.get('status', 'N/A'),
-        dataset_info.get('input_examples_file', 'N/A'),
-        dataset_info.get('ann_index_file', 'N/A'),
-        dataset_info.get('prodigy_export_file', 'N/A'),
-        dataset_info.get('annotation_schema_version', 'N/A'),
-        dataset_info.get('description', 'N/A'),
-        dataset_info.get('source_prodigy_datasets_merged', 'N/A')
-    ]
-    file_exists = os.path.isfile(registry_path)
-    with open(registry_path, 'a', newline='') as f:
-        if not file_exists or os.path.getsize(registry_path) == 0:
-            f.write(header + '\n')
-        f.write(",".join(map(str, row_data)) + '\n')
-    print(f"Dataset registry updated: {registry_path}")
-
-
-def load_jsonl(file_path):
-    """Loads a JSONL file."""
-    data = []
-    with open(file_path, 'r') as f:
-        for line in f:
-            data.append(json.loads(line))
-    return data
-
-
-def save_jsonl(file_path, data):
-    """Saves data to a JSONL file."""
-    with open(file_path, 'w') as f:
-        for item in data:
-            f.write(json.dumps(item) + '\n')
+from scripts.utilities.common_utils import load_annotation_schema, update_dataset_registry, load_jsonl, save_jsonl
 
 
 def main():
