@@ -866,7 +866,7 @@ def smart_prelabel_integrated_recipe(
 
     # 3. Add tokens
     tokenized_stream_unlogged = add_tokens(
-        nlp, parsed_task_stream, use_sentencizer=True)
+        nlp, parsed_task_stream)
     tokenized_stream = log_stream_counts(
         tokenized_stream_unlogged, "2_add_tokens")
 
@@ -977,7 +977,7 @@ def smart_prelabel_integrated_recipe(
             "labels_priority": ["ARTIST_TAG", "ALBUM_TAG", "SONG_TAG", "DATE_TAG", "ROLE_TAG", "GENRE_TAG", "LOC_TAG"],
             "exclude_by_input": True,
             "custom_theme": {"labels": custom_colors},
-            "show_whitespace": False,  # Optional: might make UI cleaner
-            "show_flag": True,  # Enable flagging UI
+            # "show_whitespace": False,  # Optional: might make UI cleaner
+            # "show_flag": True,  # Enable flagging UI
         },
     }
