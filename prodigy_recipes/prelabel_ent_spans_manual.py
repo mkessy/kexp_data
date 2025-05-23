@@ -16,6 +16,7 @@ import json
 from sentence_transformers import SentenceTransformer
 import hnswlib
 from prodigy.components.filters import filter_duplicates
+import re
 
 # Import the new parser function
 from src.kexp_processing_utils.comment_parser import parse_comment_to_prodigy_tasks
@@ -27,8 +28,74 @@ logging.basicConfig(level=logging.INFO,
 # Load .env variables for KEXP_DB_PATH
 load_dotenv()
 
-# Removed normalize_raw_db_comment_text function
-# The raw text from DB will be passed directly to the comment_parser module.
+# --- Helper constants and function for DATE entity filtering ---
+MONTH_NAMES = [
+    "january", "jan", "february", "feb", "march", "mar", "april", "apr",
+    "may", "june", "jun", "july", "jul", "august", "aug", "september",
+    "sep", "sept", "october", "oct", "november", "nov", "december", "dec"
+]
+DAY_NAMES = [
+    "monday", "mon", "tuesday", "tue", "tues", "wednesday", "wed",
+    "thursday", "thu", "thur", "thurs", "friday", "fri", "saturday",
+    "sat", "sunday", "sun"
+]
+RELATIVE_DATE_TERMS = [
+    "today", "tomorrow", "yesterday", "tonight",
+    "next week", "last week", "next month", "last month", "next year", "last year",
+    "this morning", "this afternoon", "this evening"
+]
+# Regex for typical time-only patterns (e.g., 10am, 10:30, 5 o'clock)
+TIME_ONLY_REGEX = re.compile(
+    r"^\\d{1,2}(:\\d{2})?(\\s*(am|pm|a\\.m\\.|p\\.m\\.))?(\\s*o'?clock)?$",
+    re.IGNORECASE
+)
+# Regex for patterns that are likely just years or decades (e.g., 2023, 1990s, '90s)
+YEAR_DECADE_REGEX = re.compile(r"^((\\d{4}s?)|('\\d{2}s))$", re.IGNORECASE)
+
+
+def is_likely_date_not_just_time(ent_text: str) -> bool:
+    """
+    Checks if a spaCy DATE entity text is likely a date or date-related
+    and not just a time of day.
+    """
+    text_lower = ent_text.lower()
+
+    if any(month in text_lower for month in MONTH_NAMES):
+        return True
+    if any(day in text_lower for day in DAY_NAMES):
+        return True
+    if any(term in text_lower for term in RELATIVE_DATE_TERMS):
+        return True
+    if "/" in text_lower or "-" in text_lower:  # Common date separators
+        # Avoid matching things like "end-of-day" if they are not full dates
+        # A simple check: ensure there are digits involved if a hyphen is present
+        if "-" in text_lower and not any(char.isdigit() for char in text_lower):
+            pass  # Could be a phrase, not a date like "2023-10-05"
+        else:
+            return True
+    if YEAR_DECADE_REGEX.match(text_lower):
+        return True
+    if re.search(r"\\b\\d{4}\\b", text_lower):  # 4-digit year
+        return True
+
+    # If it matches a strict time-only pattern, then it's likely just time.
+    if TIME_ONLY_REGEX.fullmatch(text_lower):
+        return False
+
+    # Keep if it has letters (e.g., "the fifth", "mid-June") and wasn't caught by TIME_ONLY_REGEX
+    if any(char.isalpha() for char in text_lower):
+        return True
+
+    # Keep if it's one or two digits (could be a day of the month)
+    if re.fullmatch(r"\\d{1,2}", text_lower):
+        return True
+
+    # Fallback: if it contains digits, and wasn't filtered as time-only, lean towards including.
+    # This is a bit broad but aims to catch more date formats.
+    if any(char.isdigit() for char in text_lower):
+        return True
+
+    return False  # Default to excluding if very uncertain
 
 
 def get_db_path_for_recipe():
@@ -191,8 +258,10 @@ def process_db_stream_with_comment_parser(raw_db_stream: Iterator[Dict[str, Any]
 #         "in", "from", "at", "near", "based", "based in"]}}, {"IS_TITLE": True, "OP": "+"}]}
 # ]
 METADATA_SPANCAT_TAGS_MAP = {
-    "db_artist_name": "ARTIST_TAG   ", "db_album_title": "ALBUM_TAG",
-    "db_song_title": "SONG_TAG", "db_record_label_name": "RECORD_LABEL_TAG"
+    "db_artist_name": "ARTIST_TAG",
+    "db_album_title": "ALBUM_TAG",
+    "db_song_title": "SONG_TAG",
+    "db_record_label_name": "RECORD_LABEL_TAG"
 }
 
 # Default path for gazetteers relative to the workspace root
@@ -255,20 +324,56 @@ def add_metadata_spans_and_finalize(stream: Iterable[Dict[str, Any]], nlp: spacy
             skipped_count += 1
             continue
 
-        doc = nlp(text_content)
-        meta_content = task.get("meta", {})
-        # Spans will now only come from metadata PhraseMatcher
-        all_found_spans = []  # Initialize as empty, no NER spans to inherit
+        # The `nlp` object used here will be the one loaded in the recipe,
+        # which includes the NER component if the model has one.
+        # `add_tokens` already runs `nlp(text)` and adds `doc` to the task if not present,
+        # or uses existing `doc`. However, to be explicit and ensure `doc.ents` is fresh
+        # for this text_content, we process it here.
+        # If `task` already contains a `doc` from `add_tokens`, it should be for `text_content`.
+        # Using `task.get("doc")` might be slightly more efficient if `add_tokens` guarantees it.
+        # Let's assume `add_tokens` correctly populates `task["doc"]`.
+        # If not, `doc = nlp(text_content)` is the fallback.
+        doc = task.get("doc")
+        if not doc:  # Fallback if doc not present from add_tokens
+            doc = nlp(text_content)
 
-        # 1. Process play-specific metadata matches (current logic)
+        meta_content = task.get("meta", {})
+        all_found_spans = []
+
+        # 1. Add NER-derived spans using the main nlp model
+        # This `nlp` model is loaded by `spacy.load(spacy_model)` in the recipe.
+        # It will perform NER if the model (e.g., en_core_web_sm) has an NER pipe.
+        if "ner" in nlp.pipe_names:  # Check if NER component exists
+            for ent in doc.ents:
+                label = None
+                source_ner_label = ent.label_  # Original NER label for source tracking
+                if ent.label_ == "PERSON":
+                    label = "ARTIST_TAG"
+                elif ent.label_ == "DATE":
+                    if is_likely_date_not_just_time(ent.text):
+                        label = "DATE_TAG"
+                # Geopolitical Entity (countries, cities, states)
+                elif ent.label_ == "GPE":
+                    label = "LOC_TAG"
+                # Potentially add other mappings like ORG -> RECORD_LABEL_TAG if appropriate and distinct enough
+
+                if label:
+                    all_found_spans.append({
+                        "start": ent.start_char, "end": ent.end_char, "label": label,
+                        "text": ent.text, "source": f"ner_spacy_{source_ner_label}",
+                        "token_start": ent.start, "token_end": ent.end - 1
+                    })
+
+        # 2. Process play-specific metadata matches
         metadata_phrase_matcher = PhraseMatcher(nlp.vocab, attr="LOWER")
         patterns_added_to_matcher = False
         for meta_key, label_tag in METADATA_SPANCAT_TAGS_MAP.items():
             search_val = meta_content.get(meta_key)
             if search_val and str(search_val).strip():
+                # Use nlp.make_doc for consistency, PhraseMatcher works with Doc patterns
                 pattern_doc = nlp.make_doc(str(search_val).strip())
                 if len(pattern_doc) > 0:
-                    # Use a key that combines label_tag and meta_key for later retrieval
+                    # Key for PhraseMatcher
                     matcher_key = f"{label_tag}::{meta_key}"
                     metadata_phrase_matcher.add(matcher_key, [pattern_doc])
                     patterns_added_to_matcher = True
@@ -276,65 +381,79 @@ def add_metadata_spans_and_finalize(stream: Iterable[Dict[str, Any]], nlp: spacy
         if patterns_added_to_matcher:
             found_phrase_matches = metadata_phrase_matcher(doc)
             for match_id_hash, start_token, end_token in found_phrase_matches:
-                # Ensure match_id_str is a string and safely attempt to split
                 raw_match_id = nlp.vocab.strings[match_id_hash]
-                match_id_str = str(raw_match_id)  # Cast to string to be safe
+                match_id_str = str(raw_match_id)
 
                 if "::" in match_id_str:
                     current_label_tag, source_meta_field = match_id_str.split(
                         "::", 1)
                 else:
                     logging.warning(
-                        f"RECIPE_FIN: Match ID string '{match_id_str}' (from hash {match_id_hash}, raw_id '{raw_match_id}') does not contain '::'. Skipping span.")
+                        f"RECIPE_FIN: Metadata Match ID string '{match_id_str}' (from hash {match_id_hash}, raw_id '{raw_match_id}') does not contain '::'. Skipping span.")
                     continue
 
                 span = doc[start_token:end_token]
                 all_found_spans.append({
                     "start": span.start_char, "end": span.end_char, "label": current_label_tag,
-                    # Corrected source
                     "text": span.text, "source": f"meta_{source_meta_field}",
                     "token_start": span.start, "token_end": span.end - 1
                 })
 
-        # 2. Process global gazetteer matches
+        # 3. Process global gazetteer matches
         if global_gazetteer_matcher:
             global_matches = global_gazetteer_matcher(doc)
             for match_id_hash, start_token, end_token in global_matches:
-                # This will be "ARTIST_TAG", "ALBUM_TAG", etc.
                 label_from_matcher = nlp.vocab.strings[match_id_hash]
-                # Ensure it's a string
                 current_label_tag = str(label_from_matcher)
                 span = doc[start_token:end_token]
                 all_found_spans.append({
                     "start": span.start_char, "end": span.end_char, "label": current_label_tag,
-                    # Consistent source format
                     "text": span.text, "source": f"gazetteer_{current_label_tag.lower()}",
                     "token_start": span.start, "token_end": span.end - 1
                 })
 
-        unique_spans = []
-        seen_spans_tuples = set()
+        # 4. Deduplicate and finalize spans
+        # Sort by start_char, then by inverse length (longer preferred), then by label.
+        # This helps in a consistent order for deduplication.
         all_found_spans.sort(key=lambda s: (
             s["start"], -(s["end"] - s["start"]), s["label"]))
+
+        unique_spans = []
+        seen_spans_tuples = set()  # Stores (token_start, token_end, label)
+
         for span_dict in all_found_spans:
+            # Ensure token_start and token_end are present.
+            # NER and PhraseMatcher spans should have them directly.
+            # If they were derived only from char offsets, align to tokens.
             if "token_start" not in span_dict or "token_end" not in span_dict:
-                char_span = doc.char_span(span_dict["start"], span_dict["end"])
-                if char_span:
-                    span_dict["token_start"] = char_span.start
-                    span_dict["token_end"] = char_span.end - 1
+                # This case should be less common if sources provide token indices
+                char_span_for_alignment = doc.char_span(
+                    span_dict["start"], span_dict["end"], label=span_dict["label"])
+                if char_span_for_alignment:
+                    span_dict["token_start"] = char_span_for_alignment.start
+                    span_dict["token_end"] = char_span_for_alignment.end - 1
                 else:
-                    print(
-                        f"RECIPE_FIN: Could not align span to tokens: {span_dict} in text: '{doc.text[:50]}...'")
+                    # This can happen if char offsets don't align to token boundaries.
+                    # Log and skip this span.
+                    # print(
+                    #     f"RECIPE_FIN: Could not align char span to tokens: {span_dict} in text: '{doc.text[:70]}...' "
+                    #     f"Play ID: {meta_content.get('play_id', 'N/A')}, Segment Hash: {task.get('_input_hash', 'N/A')}"
+                    # )
                     continue
+
             span_tuple = (span_dict["token_start"],
                           span_dict["token_end"], span_dict["label"])
+
             if span_tuple not in seen_spans_tuples:
                 unique_spans.append(span_dict)
                 seen_spans_tuples.add(span_tuple)
+            # If span_tuple is already seen, this span (from a potentially different source
+            # or just a duplicate) is skipped, effectuating deduplication.
 
         task["spans"] = unique_spans
-        task = set_hashes(task)
+        task = set_hashes(task)  # Re-hash task if spans changed
         yield task
+
     if skipped_count > 0:
         print(
             f"RECIPE_FIN: Skipped {skipped_count} tasks due to missing text during finalization.")
@@ -469,7 +588,7 @@ def build_and_save_ann_index(tasks: List[Dict[str, Any]], index_path: str, model
 @prodigy.recipe(
     "kexp.smart_prelabel_v2",
     dataset=("Dataset to save annotations to", "positional", None, str),
-    spacy_model=("SpaCy model for tokenization and matching",
+    spacy_model=("SpaCy model for tokenization, NER, and matching",  # Clarified usage
                  "option", "sm", str),
     labels_file=("Path to text file with labels (one per line)",
                  "option", "lf", str),
@@ -496,10 +615,21 @@ def smart_prelabel_integrated_recipe(
     4. Pre-label entities from global gazetteers (ARTIST, ALBUM, SONG, ROLE, GENRE).
     Presents a unified interface for SpanCat annotation.
     """
+    # Load the spaCy model. This model will be used for tokenization by add_tokens,
+    # for NER in add_metadata_spans_and_finalize, and for PhraseMatcher.
+    # Ensure the model has an NER component if NER pre-labeling is desired.
+    # Standard models like en_core_web_sm/md/lg include NER.
     nlp = spacy.load(spacy_model)
+    logging.info(
+        f"RECIPE_CONFIG: Loaded spaCy model '{spacy_model}'. Components: {nlp.pipe_names}")
+    if "ner" not in nlp.pipe_names:
+        logging.warning(
+            f"RECIPE_CONFIG: SpaCy model '{spacy_model}' does not have an NER component. "
+            "NER-based pre-labeling for PERSON and DATE will not occur."
+        )
+
     db_path = get_db_path_for_recipe()
 
-    # Load labels from file
     labels_path = pathlib.Path(labels_file)
     if not labels_path.is_file():
         print(f"RECIPE: Labels file not found at {labels_file}")
@@ -522,16 +652,16 @@ def smart_prelabel_integrated_recipe(
 
     # --- Determine output file path for processed tasks ---
     final_output_path: Optional[str] = None
-    if output_file:  # User provided a specific path
+    if output_file:
         final_output_path = output_file
         print(
             f"RECIPE_CONFIG: User specified output file: {final_output_path}")
-    else:  # No output_file provided, use default location and name
+    else:
         default_dir = pathlib.Path(
-            "/Users/pooks/Dev/kexp_data/data/processed_examples/")
+            os.getcwd()) / "data" / "processed_examples"  # More robust default
+        # default_dir = pathlib.Path("/Users/pooks/Dev/kexp_data/data/processed_examples/") # Old path
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         default_filename = f"{dataset}_examples_{timestamp}.jsonl"
-        # Convert Path object to string
         final_output_path = str(default_dir / default_filename)
         print(
             f"RECIPE_CONFIG: No output file specified by user. Defaulting to: {final_output_path}")
@@ -593,7 +723,7 @@ def smart_prelabel_integrated_recipe(
     final_stream_unlogged = add_metadata_spans_and_finalize(
         stream_before_metadata_spans, nlp, global_entity_matcher)
     final_stream_logged_counts = log_stream_counts(
-        iter(final_stream_unlogged), "4_finalize_spans")
+        iter(final_stream_unlogged), "4_finalize_spans_incl_ner_meta_gaz")
 
     # --- NEW: Split stream, save to file, build ANN index, and serve to Prodigy ---
     # final_stream_for_prodigy = stream_to_file_and_yield( # OLD LINE TO BE REMOVED
@@ -604,7 +734,7 @@ def smart_prelabel_integrated_recipe(
 
     # 1. Split the final processed stream
     print(f"RECIPE_PIPELINE: Splitting final stream for ANN indexing/file saving and Prodigy UI.")
-    stream_for_ann_and_file, stream_for_prodigy = tee(
+    stream_for_ann_and_file, stream_for_prodigy_ui = tee(
         final_stream_logged_counts, 2)
 
     # 2. Persist tasks to JSONL and get them as a list
@@ -640,27 +770,45 @@ def smart_prelabel_integrated_recipe(
         pass
 
     label_colors = {
-        # "LOCATION": "#FF6347", # REMOVED
-        # "DATE": "#4682B4", # REMOVED
         "ARTIST_TAG": "#FFD700",
         "ALBUM_TAG": "#ADFF2F",
         "SONG_TAG": "#87CEFA",
         "RECORD_LABEL_TAG": "#DA70D6",
         "ROLE_TAG": "#FF7F50",
         "GENRE_TAG": "#6495ED",
+        "DATE_TAG": "#D3D3D3",
+        "LOC_TAG": "#D3D3D3",
+        "ARTIST_BIO_SPAN": "#D3D3D3", "NEW_RELEASE_SPAN": "#D3D3D3",
+        "GROUP_COMP_SPAN": "#D3D3D3", "SHOW_DATE_SPAN": "#D3D3D3"
     }
-    default_color = "#D3D3D3"
+    default_color = "#BEBEBE"  # Slightly different default for truly unspecified
     custom_colors = {label: label_colors.get(
         label, default_color) for label in ui_labels_list}
 
+    # Ensure DATE_TAG is in labels if NER is adding it.
+    # ui_labels_list comes from labels_file, so it should be there.
+    if "ner" in nlp.pipe_names and "DATE_TAG" not in ui_labels_list:  # Check if NER is active for this warning
+        logging.warning("RECIPE_CONFIG: DATE_TAG is being added by NER but not found in labels file. "
+                        "Add it to config/labels.txt for it to appear in UI selection.")
+        # ui_labels_list.append("DATE_TAG") # Optionally auto-add, but better to require in file
+
+    if "ner" in nlp.pipe_names and "LOC_TAG" not in ui_labels_list:  # Check for LOC_TAG
+        logging.warning("RECIPE_CONFIG: LOC_TAG is being added by NER (from GPE entities) but not found in labels file. "
+                        "Add it to config/labels.txt for it to appear in UI selection.")
+
     return {
         "dataset": dataset,
-        "stream": stream_for_prodigy,  # MODIFIED to use the tee'd stream for Prodigy
+        "stream": stream_for_prodigy_ui,
         "view_id": "spans_manual",
         "config": {
-            "labels": ui_labels_list, "span_labels": ui_labels_list,
-            # Example: Prioritize these if overlaps are tricky
-            "labels_priority": ["ARTIST_TAG", "ALBUM_TAG", "SONG_TAG", "ROLE_TAG", "GENRE_TAG"],
-            "exclude_by_input": True, "custom_theme": {"labels": custom_colors},
+            "labels": ui_labels_list,
+            # Keep for compatibility, though "labels" is primary for new Prodigy
+            "span_labels": ui_labels_list,
+            # Added DATE_TAG, LOC_TAG
+            "labels_priority": ["ARTIST_TAG", "ALBUM_TAG", "SONG_TAG", "DATE_TAG", "ROLE_TAG", "GENRE_TAG", "LOC_TAG"],
+            "exclude_by_input": True,
+            "custom_theme": {"labels": custom_colors},
+            "show_whitespace": False,  # Optional: might make UI cleaner
+            "show_flag": True,  # Enable flagging UI
         },
     }
