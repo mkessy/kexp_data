@@ -1,0 +1,33 @@
+campaign_name: "artist_biographical_details_v1"
+description: "Focus on annotating artist biographical information (ARTIST_BIO_SPAN) and associated artist tags (ARTIST_TAG), and origin locations (ARTIST_LOC_ORGIN_SPAN)."
+
+# Version of the consolidated annotation schema this campaign adheres to
+annotation_schema_version: "1.0" # Points to config/schemas/kexp_annotation_schema_v1.0.yaml
+
+# Labels to be actively presented and annotated in the Prodigy UI for this campaign
+target_labels_for_ui:
+  - "ARTIST_TAG"
+  - "ARTIST_BIO_SPAN"
+  - "ARTIST_LOC_ORGIN_SPAN"
+
+# Specification for the source data for this campaign's initial iteration
+source_data_specification:
+  type: "jsonl_file"
+  path: "data/source_material/unannotated_batch1.jsonl"
+  # Or for DB (example):
+  # query_params:
+  #   min_comment_length: 50
+  #   random_sample_size: 1000
+
+# Optional: Pre-labeling strategy for this campaign
+pre_labeling:
+  use_script_04: true # Whether to run 04_prelabel_for_prodigy.py
+  # script_04_config: # Optional: if 04_prelabel needs specific overrides for this campaign
+  #   metadata_fields_to_check:
+  #     db_artist_name: ["ARTIST_TAG"] # Example: only pre-label ARTIST_TAG for this campaign
+
+# Optional: ANN bootstrapping configuration
+ann_bootstrapping:
+  initial_ann_index: null # Path to an existing index if starting from one
+  # If null, an index will be built from source_data_specification after pre-labeling
+  sentence_transformer_model: "all-MiniLM-L6-v2" # Model for embedding

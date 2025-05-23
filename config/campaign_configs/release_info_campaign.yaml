@@ -1,0 +1,27 @@
+campaign_name: "release_information_v1"
+description: "Focus on annotating new releases (NEW_RELEASE_SPAN), song attributions (SONG_ATTRIBUTION_SPAN), and associated album/song tags."
+
+# Version of the consolidated annotation schema this campaign adheres to
+annotation_schema_version: "1.0" # Points to config/schemas/kexp_annotation_schema_v1.0.yaml
+
+# Labels to be actively presented and annotated in the Prodigy UI for this campaign
+target_labels_for_ui:
+  - "NEW_RELEASE_SPAN"
+  - "SONG_ATTRIBUTION_SPAN"
+  - "ALBUM_TAG"
+  - "SONG_TAG"
+  - "ARTIST_TAG" # Often relevant for releases and attributions
+  - "DATE_TAG" # Often relevant for releases
+
+# Specification for the source data for this campaign's initial iteration
+source_data_specification:
+  type: "jsonl_file"
+  path: "data/source_material/unannotated_batch2.jsonl" # Assuming a different batch or filtered set
+
+# Optional: Pre-labeling strategy for this campaign
+pre_labeling:
+  use_script_04: false # Example: Maybe this campaign starts with no pre-labels
+
+# Optional: ANN bootstrapping configuration
+ann_bootstrapping:
+  sentence_transformer_model: "all-MiniLM-L6-v2"
