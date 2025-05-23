@@ -9,7 +9,7 @@ from collections import defaultdict
 # Assuming load_annotation_schema and update_dataset_registry might be shared
 # For now, keep update_dataset_registry here, or move to a common util file later.
 
-from scripts.utilities.common_utils import load_annotation_schema, update_dataset_registry, load_jsonl, save_jsonl
+from scripts.utilities.common_utils import load_annotation_schema, update_dataset_registry, load_jsonl, save_jsonl, validate_prodigy_export_data
 
 
 def main():
@@ -148,11 +148,26 @@ def main():
         merged_example['spans'] = unique_spans_for_example
         gold_standard_annotations.append(merged_example)
 
-    # 5. Final Validation (Placeholder)
-    # - Validate all spans against the --target-annotation-schema-version (already partially done by filtering)
-    # - Perform consistency checks (e.g., no overlapping spans of incompatible types, if such rules exist in schema).
+    # 5. Final Validation
     print(
-        f"Final validation against schema v{args.target_annotation_schema_version} (Placeholder)...")
+        f"Performing final validation of {len(gold_standard_annotations)} merged examples against schema v{args.target_annotation_schema_version}...")
+    # The `valid_labels_from_target_schema` set is already available from earlier in the script.
+    val_errors, val_warnings = validate_prodigy_export_data(
+        gold_standard_annotations, schema_labels=valid_labels_from_target_schema)
+
+    if val_warnings:
+        print("Validation Warnings:")
+        for warn in val_warnings:
+            print(f"  - {warn}")
+    if val_errors:
+        print("Validation ERRORS:")
+        for err in val_errors:
+            print(f"  - {err}")
+        print(
+            "CRITICAL: Gold standard data has validation errors. Please review before use.")
+        # sys.exit(1) # Optionally, make this a hard stop
+    else:
+        print("Final data validation passed (or only produced warnings).")
 
     # 6. Write Output
     output_filename = f"{args.output_base_filename}_asv{args.target_annotation_schema_version}_{args.gold_version_tag}.jsonl"

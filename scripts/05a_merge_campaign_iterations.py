@@ -101,21 +101,49 @@ def main():
         del chosen_version['_source_file']
         consolidated_annotations.append(chosen_version)
 
-    # 4. Schema Alignment (Placeholder)
-    # - Verify that all labels in the merged spans conform to the specified --annotation-schema-version.
-    # - This would involve loading the schema and checking each span's label.
-    # - For now, this step is a placeholder.
+    # 4. Schema Alignment
     print(
-        f"Schema alignment against v{args.annotation_schema_version} (Placeholder)...")
-    # schema_path = os.path.join(args.workspace_root, "config", "schemas", f"kexp_annotation_schema_v{args.annotation_schema_version}.yaml")
-    # annotation_schema = load_annotation_schema(schema_path) # Now uses imported version
-    # valid_labels = {label_def['name'] for label_def in annotation_schema['labels']}
-    # final_annotations_for_saving = []
-    # for ex in consolidated_annotations:
-    #     if 'spans' in ex:
-    #         ex['spans'] = [span for span in ex['spans'] if span['label'] in valid_labels]
-    #     final_annotations_for_saving.append(ex)
-    # consolidated_annotations = final_annotations_for_saving
+        f"Performing schema alignment against v{args.annotation_schema_version}...")
+    try:
+        schema_path = os.path.join(args.workspace_root, "config", "schemas",
+                                   f"kexp_annotation_schema_v{args.annotation_schema_version}.yaml")
+        annotation_schema = load_annotation_schema(schema_path)
+        valid_labels = {label_def['name']
+                        for label_def in annotation_schema.get('labels', [])}
+        if not valid_labels:
+            print(
+                f"Warning: No labels found in schema v{args.annotation_schema_version}. Cannot perform schema alignment for labels.")
+            # Potentially exit or handle as an error depending on desired strictness
+        else:
+            print(
+                f"Loaded {len(valid_labels)} valid labels from schema v{args.annotation_schema_version} for alignment.")
+
+        aligned_annotations = []
+        for ex in consolidated_annotations:
+            # Ensure spans exist and is not None
+            if 'spans' in ex and ex['spans'] is not None:
+                original_span_count = len(ex['spans'])
+                ex['spans'] = [span for span in ex['spans']
+                               if span.get('label') in valid_labels]
+                if len(ex['spans']) != original_span_count:
+                    print(
+                        f"Info: Example ID {ex.get('_input_hash', ex.get('text', 'Unknown example')[:30])} had spans filtered due to schema alignment. Original: {original_span_count}, New: {len(ex['spans'])}")
+            aligned_annotations.append(ex)
+        consolidated_annotations = aligned_annotations
+        print("Schema alignment complete.")
+
+    except FileNotFoundError as e:
+        print(
+            f"ERROR during schema alignment: {e} - Target schema file not found. Cannot align labels.")
+        # Depending on strictness, you might want to sys.exit(1) or proceed with unaligned labels but a warning.
+        print("Warning: Proceeding without label alignment due to missing schema.")
+    except ValueError as e:
+        print(
+            f"ERROR during schema alignment: {e} - Invalid target schema file. Cannot align labels.")
+        print("Warning: Proceeding without label alignment due to invalid schema.")
+    except Exception as e:
+        print(f"An unexpected ERROR occurred during schema alignment: {e}")
+        print("Warning: Proceeding without label alignment due to unexpected error.")
 
     # 5. Write Output
     output_dir = os.path.dirname(args.output_file)
