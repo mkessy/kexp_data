@@ -152,10 +152,10 @@ def validate_campaign_config_file(file_path, workspace_root):
     if not isinstance(source_spec, dict):
         errors.append("'source_data_specification' must be a dictionary.")
     # Basic check
-    elif 'type' not in source_spec or 'path' not in source_spec.get('type', 'jsonl_file'):
+    elif 'type' not in source_spec or 'path' not in source_spec:
         # More specific checks based on type could be added here
-        pass  # Allowing flexibility for now as per plan
-
+        errors.append(
+            "'source_data_specification' missing 'type' or 'path' key.")
     return errors, warnings
 
 
