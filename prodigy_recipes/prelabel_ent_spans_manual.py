@@ -18,6 +18,9 @@ import hnswlib
 from prodigy.components.filters import filter_duplicates
 import re
 
+# Import gliner_spacy
+import gliner_spacy  # Added for GLiNER integration
+
 # Import the new parser function
 from src.kexp_processing_utils.comment_parser import parse_comment_to_prodigy_tasks
 
@@ -305,7 +308,7 @@ def load_gazetteers_to_phrasematcher(nlp: spacy.Language, gazetteer_dir: pathlib
     return matcher
 
 
-def add_metadata_spans_and_finalize(stream: Iterable[Dict[str, Any]], nlp: spacy.Language, global_gazetteer_matcher: Optional[PhraseMatcher] = None) -> Iterable[Dict[str, Any]]:
+def add_metadata_spans_and_finalize(stream: Iterable[Dict[str, Any]], nlp: spacy.Language, global_gazetteer_matcher: Optional[PhraseMatcher] = None, use_gliner_ner: bool = False, gliner_ner_labels: Optional[List[str]] = None) -> Iterable[Dict[str, Any]]:
     skipped_count = 0
     for task in stream:
         text_content = task.get("text")
@@ -340,11 +343,75 @@ def add_metadata_spans_and_finalize(stream: Iterable[Dict[str, Any]], nlp: spacy
         meta_content = task.get("meta", {})
         all_found_spans = []
 
-        # 1. Add NER-derived spans using the main nlp model
-        # This `nlp` model is loaded by `spacy.load(spacy_model)` in the recipe.
-        # It will perform NER if the model (e.g., en_core_web_sm) has an NER pipe.
-        if "ner" in nlp.pipe_names:  # Check if NER component exists
+        # 0. If GLiNER is enabled, run it first or alongside standard NER.
+        #    The `gliner_nlp_pipeline` (which is now just `nlp` if gliner was added to it)
+        #    already processed `doc` if `gliner_custom` pipe is present in `nlp`.
+        #    The entities would be in `doc.ents` if `gliner_custom` replaced/ran before spaCy's default NER.
+        #    If `gliner_custom` runs *after* spaCy's NER, then doc.ents would be from spaCy's NER.
+        #    It's important how gliner_spacy component interacts with existing .ents
+        #    The gliner-spacy docs show it sets doc.ents.
+        #    If we added gliner_custom to the main nlp, then doc.ents might already be from GLiNER.
+        #    Let's assume gliner_spacy sets doc.ents. We need to distinguish its source.
+        #    The `gliner-spacy` component adds a `._.score` attribute to spans.
+
+        # Re-thinking: If gliner_custom is added to the main `nlp`, `add_tokens` would use it.
+        # So `doc.ents` inside this function (after `add_tokens`) would be from `nlp`'s pipeline.
+        # If "gliner_custom" is in `nlp.pipe_names` and runs before/replaces 'ner', then doc.ents are from GLiNER.
+
+        # Let's be explicit: if use_gliner_ner, we expect "gliner_custom" to be in nlp.pipe_names
+        # and that it has already populated doc.ents (or will when nlp(text_content) is called).
+        # The challenge is distinguishing GLiNER ents from spaCy default NER ents if both ran or
+        # if GLiNER is the *only* NER.
+
+        # Let's assume that if `use_gliner_ner` is true, the `nlp` object passed to this function
+        # (and used in `add_tokens`) has the `gliner_custom` pipe.
+        # The entities in `doc.ents` will then be from GLiNER.
+        # We can check for `ent._.score` to confirm they are GLiNER entities.
+
+        # If `use_gliner_ner` is True, we process `doc.ents` as potential GLiNER results.
+        # If `use_gliner_ner` is False, we process `doc.ents` as potential spaCy NER results (if 'ner' pipe exists).
+
+        if use_gliner_ner and "gliner_custom" in nlp.pipe_names:
+            # Assume doc.ents are now from GLiNER, possibly overriding spaCy's NER if it also ran.
+            # The gliner_spacy component sets ent.label_ to the ones provided in its config.
             for ent in doc.ents:
+                if hasattr(ent._, 'score'):  # Check if it's a GLiNER entity
+                    # GLiNER entities already have their specific labels.
+                    # We might want to map them to our internal schema or use as-is.
+                    # For now, use GLiNER's label directly.
+                    # Ensure the label is one of the configured gliner_ner_labels for sanity.
+                    if gliner_ner_labels and ent.label_ in gliner_ner_labels:
+                        all_found_spans.append({
+                            "start": ent.start_char, "end": ent.end_char, "label": ent.label_,  # Use GLiNER's label
+                            # Source clearly indicates GLiNER and its label
+                            "text": ent.text, "source": f"ner_gliner_{ent.label_}",
+                            "token_start": ent.start, "token_end": ent.end - 1,
+                            # Store GLiNER score
+                            "meta": {"score": ent._.score}
+                        })
+                    # else:
+                        # This entity might be from a previous NER step if GLiNER didn't overwrite all,
+                        # or if the label isn't in the expected gliner_labels.
+                        # print(f"GLINER_NOTE: Entity '{ent.text}' with label '{ent.label_}' found, but not in specified gliner_labels or no score. Skipping as GLiNER ent.")
+                # else:
+                    # If use_gliner_ner is true, but this ent doesn't have a score,
+                    # it might be a non-GLiNER ent if spaCy's NER also ran.
+                    # This logic gets tricky if pipes run sequentially and modify doc.ents.
+                    # For now, if use_gliner_ner, only take ents with ._.score as from GLiNER.
+                    # This means if spaCy's default NER runs *after* GLiNER, its ents might be missed here.
+                    # The `nlp.add_pipe("gliner_spacy", ..., before="ner")` in setup should handle this.
+                    # If "ner" is not present, it's added last, which is fine.
+
+        # 1. Add spaCy's built-in NER-derived spans (if GLiNER is not used, or if we want to combine)
+        # If GLiNER is used and it *replaces* spaCy's NER (e.g. by being named 'ner' or running before and clearing),
+        # then this block might find nothing or find GLiNER's ents again if not careful.
+        # If `use_gliner_ner` is True, we've already processed `doc.ents` assuming they are from GLiNER.
+        # So, this block should only run if `use_gliner_ner` is False AND 'ner' pipe exists.
+        if not use_gliner_ner and "ner" in nlp.pipe_names:
+            for ent in doc.ents:
+                # Ensure this ent doesn't have 'score' if we want to be super sure it's not a GLiNER ent
+                # that somehow slipped through the above block.
+                # However, if use_gliner_ner is false, we assume doc.ents are from the original NER.
                 label = None
                 source_ner_label = ent.label_  # Original NER label for source tracking
                 if ent.label_ == "PERSON":
@@ -416,7 +483,10 @@ def add_metadata_spans_and_finalize(stream: Iterable[Dict[str, Any]], nlp: spacy
         # Sort by start_char, then by inverse length (longer preferred), then by label.
         # This helps in a consistent order for deduplication.
         all_found_spans.sort(key=lambda s: (
-            s["start"], -(s["end"] - s["start"]), s["label"]))
+            s["start"], -(s["end"] - s["start"]), s["label"], s.get("meta",
+                                                                    # Include score for sorting
+                                                                    {}).get("score", 0)
+        ))
 
         unique_spans = []
         seen_spans_tuples = set()  # Stores (token_start, token_end, label)
@@ -588,7 +658,7 @@ def build_and_save_ann_index(tasks: List[Dict[str, Any]], index_path: str, model
 @prodigy.recipe(
     "kexp.smart_prelabel_v2",
     dataset=("Dataset to save annotations to", "positional", None, str),
-    spacy_model=("SpaCy model for tokenization, NER, and matching",  # Clarified usage
+    spacy_model=("SpaCy model for tokenization, NER, and matching",
                  "option", "sm", str),
     labels_file=("Path to text file with labels (one per line)",
                  "option", "lf", str),
@@ -597,7 +667,15 @@ def build_and_save_ann_index(tasks: List[Dict[str, Any]], index_path: str, model
     db_random_order=("Fetch comments from DB in random order",
                      "flag", "dbr", bool),
     output_file=("Optional: Path to save all processed tasks to a JSONL file",
-                 "option", "out", Optional[str])
+                 "option", "out", Optional[str]),
+    # --- GLiNER specific options ---
+    use_gliner_ner=("Enable GLiNER for zero-shot NER", "flag", "gn", bool),
+    gliner_model=("GLiNER model name (e.g., urchade/gliner_multi)",
+                  "option", "gm", str),
+    gliner_labels=("Comma-separated list of entity labels for GLiNER (e.g., person,location)",
+                   "option", "gl", str),
+    gliner_threshold=("GLiNER threshold for entity confidence",
+                      "option", "gt", float)
 )
 def smart_prelabel_integrated_recipe(
     dataset: str,
@@ -605,28 +683,118 @@ def smart_prelabel_integrated_recipe(
     labels_file: str = "config/labels.txt",
     db_limit: int = 2000,
     db_random_order: bool = False,
-    output_file: Optional[str] = None
+    output_file: Optional[str] = None,
+    # --- GLiNER specific parameters ---
+    use_gliner_ner: bool = False,
+    gliner_model: str = "urchade/gliner_multi",  # Default GLiNER model
+    gliner_labels: Optional[str] = None,  # Default to None, user must specify
+    gliner_threshold: float = 0.5  # Default threshold
 ):
     """
-    Prodigy recipe to:
-    1. Fetch raw comments from KEXP DB (via KEXP_DB_PATH env var).
-    2. Segment comments and normalize each segment.
-    3. Pre-label specific SpanCat TAGs from DB metadata using spaCy's PhraseMatcher.
-    4. Pre-label entities from global gazetteers (ARTIST, ALBUM, SONG, ROLE, GENRE).
-    Presents a unified interface for SpanCat annotation.
+    Prodigy recipe to fetch KEXP comments, segment them, pre-label for entities and spans,
+    and present them for manual span categorization and entity correction.
+
+    Includes options for metadata-based pre-labeling, gazetteer matching,
+    and potentially NER from a base spaCy model.
     """
-    # Load the spaCy model. This model will be used for tokenization by add_tokens,
-    # for NER in add_metadata_spans_and_finalize, and for PhraseMatcher.
-    # Ensure the model has an NER component if NER pre-labeling is desired.
-    # Standard models like en_core_web_sm/md/lg include NER.
-    nlp = spacy.load(spacy_model)
-    logging.info(
-        f"RECIPE_CONFIG: Loaded spaCy model '{spacy_model}'. Components: {nlp.pipe_names}")
-    if "ner" not in nlp.pipe_names:
-        logging.warning(
-            f"RECIPE_CONFIG: SpaCy model '{spacy_model}' does not have an NER component. "
-            "NER-based pre-labeling for PERSON and DATE will not occur."
-        )
+    # --- Logging setup for the recipe ---
+    # Use Prodigy's logger, or configure a custom one if needed
+    # For now, relying on print statements and Prodigy's verbose output
+    print(f"RECIPE_INIT: Starting recipe 'kexp.smart_prelabel_v2'...")
+    print(f"RECIPE_INIT: Dataset: {dataset}")
+    print(f"RECIPE_INIT: SpaCy model for tokenization/base NER: {spacy_model}")
+    print(f"RECIPE_INIT: Labels file: {labels_file}")
+    print(f"RECIPE_INIT: DB limit: {db_limit}")
+    print(f"RECIPE_INIT: DB random order: {db_random_order}")
+    print(
+        f"RECIPE_INIT: Output file for all tasks: {output_file if output_file else 'Not specified'}")
+
+    # --- Load spaCy model for tokenization and potentially base NER ---
+    # This needs to be loaded before GLiNER setup, as GLiNER might be added to this nlp instance.
+    print(f"RECIPE_LOAD: Loading spaCy model: {spacy_model}...")
+    try:
+        nlp = spacy.load(spacy_model)
+    except OSError:
+        print(
+            f"RECIPE_ERR: Could not load spaCy model '{spacy_model}'. "
+            f"Please ensure it's downloaded (e.g., python -m spacy download {spacy_model}).")
+        return  # Exit recipe
+    print(f"RECIPE_LOAD: SpaCy model '{spacy_model}' loaded successfully.")
+    print(f"RECIPE_LOAD: Loaded spaCy pipeline components: {nlp.pipe_names}")
+
+    # --- GLiNER Setup (if enabled) ---
+    # gliner_nlp = None # This was for a separate GLiNER nlp; now integrating into main nlp
+    parsed_gliner_labels = []
+    if use_gliner_ner:
+        print(f"RECIPE_INIT_GLINER: GLiNER NER is ENABLED.")
+        print(f"RECIPE_INIT_GLINER: GLiNER Model: {gliner_model}")
+        if not gliner_labels:
+            print("RECIPE_ERR_GLINER: GLiNER is enabled, but no labels were specified via --gliner-labels. GLiNER will not be used.")
+            use_gliner_ner = False  # Disable if no labels
+        else:
+            parsed_gliner_labels = [
+                label.strip() for label in gliner_labels.split(',') if label.strip()]
+            if not parsed_gliner_labels:
+                print(
+                    "RECIPE_ERR_GLINER: GLiNER labels specified are empty after parsing. GLiNER will not be used.")
+                use_gliner_ner = False  # Disable if labels parse to empty
+            else:
+                print(
+                    f"RECIPE_INIT_GLINER: GLiNER Labels: {parsed_gliner_labels}")
+                print(
+                    f"RECIPE_INIT_GLINER: GLiNER Threshold: {gliner_threshold}")
+                try:
+                    gliner_config = {
+                        "gliner_model": gliner_model,
+                        "labels": parsed_gliner_labels,
+                        "threshold": gliner_threshold,
+                        "chunk_size": 250,
+                        "style": "ent"
+                    }
+
+                    pipe_name_gliner = "gliner_custom_ner"  # Use a distinct name
+
+                    if pipe_name_gliner not in nlp.pipe_names:
+                        # Add GLiNER pipe. If 'ner' (spaCy's default) exists, add GLiNER before it.
+                        # This makes GLiNER the primary NER if enabled.
+                        nlp.add_pipe("gliner_spacy", name=pipe_name_gliner, config=gliner_config,
+                                     before="ner" if "ner" in nlp.pipe_names else None)
+                        print(
+                            f"RECIPE_LOAD_GLINER: Added 'gliner_spacy' (as '{pipe_name_gliner}') to spaCy pipeline '{spacy_model}'.")
+                    else:
+                        print(
+                            f"RECIPE_LOAD_GLINER: 'gliner_spacy' (as '{pipe_name_gliner}') already in spaCy pipeline '{spacy_model}'. Reconfiguring it.")
+                        nlp.replace_pipe(pipe_name_gliner,
+                                         "gliner_spacy", config=gliner_config)
+                        print(
+                            f"RECIPE_LOAD_GLINER: Replaced and reconfigured '{pipe_name_gliner}' in spaCy pipeline '{spacy_model}'.")
+
+                    # Update the nlp.pipe_names list for logging
+                    print(
+                        f"RECIPE_LOAD: Updated spaCy pipeline components: {nlp.pipe_names}")
+
+                except Exception as e:
+                    print(
+                        f"RECIPE_ERR_GLINER: Failed to initialize or add GLiNER to spaCy pipeline: {e}")
+                    print(
+                        "RECIPE_ERR_GLINER: Ensure 'gliner-spacy' is installed and Python version is compatible (3.7-3.10).")
+                    use_gliner_ner = False
+    else:
+        print(f"RECIPE_INIT_GLINER: GLiNER NER is DISABLED.")
+
+    # --- Load spaCy model for tokenization and potentially base NER ---
+    # print(f"RECIPE_LOAD: Loading spaCy model: {spacy_model}...")
+    # try:
+    #     nlp = spacy.load(spacy_model)
+    # except OSError:
+    #     print(
+    #         f"RECIPE_ERR: Could not load spaCy model '{spacy_model}'. "
+    #         f"Please ensure it's downloaded (e.g., python -m spacy download {spacy_model}).")
+    #     return  # Exit recipe
+    # print(f"RECIPE_LOAD: SpaCy model '{spacy_model}' loaded successfully.")
+    # print(f"RECIPE_LOAD: Loaded spaCy pipeline components: {nlp.pipe_names}")
+
+    # --- Load labels for SpanCat ---
 
     db_path = get_db_path_for_recipe()
 
@@ -697,7 +865,8 @@ def smart_prelabel_integrated_recipe(
         parsed_task_stream_unlogged, "1_comment_parser")
 
     # 3. Add tokens
-    tokenized_stream_unlogged = add_tokens(nlp, parsed_task_stream)
+    tokenized_stream_unlogged = add_tokens(
+        nlp, parsed_task_stream, use_sentencizer=True)
     tokenized_stream = log_stream_counts(
         tokenized_stream_unlogged, "2_add_tokens")
 
@@ -721,7 +890,7 @@ def smart_prelabel_integrated_recipe(
     # 5. Add metadata-based SpanCat TAGs and finalize spans
     # This function now receives the output of add_tokens directly (wrapped for logging)
     final_stream_unlogged = add_metadata_spans_and_finalize(
-        stream_before_metadata_spans, nlp, global_entity_matcher)
+        stream_before_metadata_spans, nlp, global_entity_matcher, use_gliner_ner, parsed_gliner_labels)
     final_stream_logged_counts = log_stream_counts(
         iter(final_stream_unlogged), "4_finalize_spans_incl_ner_meta_gaz")
 

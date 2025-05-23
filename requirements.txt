@@ -17,6 +17,7 @@ en-core-web-trf @ https://github.com/explosion/spacy-models/releases/download/en
 fastapi==0.110.3
 filelock==3.18.0
 fsspec==2025.3.2
+gliner-spacy
 h11==0.16.0
 hnswlib==0.7.0
 huggingface-hub==0.31.4
